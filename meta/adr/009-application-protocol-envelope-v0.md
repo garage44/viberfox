@@ -7,7 +7,7 @@
 - **Date**: 2025-03-21
 - **Tags**: [protocol, networking, api]
 - **Decision Type**: architecture_pattern
-- **Related**: [ADR-008, ADR-010, ADR-011]
+- **Related**: [ADR-008, ADR-010, ADR-011, ADR-016]
 - **Supersedes**: []
 - **Superseded By**: []
 ---

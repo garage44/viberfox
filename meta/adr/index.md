@@ -17,3 +17,4 @@
 | [013](./013-sqlite-migrations-and-server-writer.md) | SQLite Migrations and Single Server Writer | Proposed | sqlite, storage, migrations, server |
 | [014](./014-runtime-configuration-and-operations.md) | Runtime Configuration and Operations | Proposed | config, ops, deployment |
 | [015](./015-workspace-module-boundaries.md) | Workspace Module and Crate Boundaries | Proposed | workspace, crates, architecture |
+| [016](./016-authentication-and-session-model-v0.md) | Authentication and Server Session Model (v0) | Proposed | auth, session, security, networking, protocol, cli, ops |

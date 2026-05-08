@@ -1,4 +1,5 @@
 use bevy::asset::AssetPlugin;
+use bevy::log::LogPlugin;
 use bevy::pbr::light_consts::lux::AMBIENT_DAYLIGHT;
 use bevy::prelude::*;
 use bevy_atmosphere::prelude::*;
@@ -32,7 +33,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off,vibers_rs=info")),
         )
         .init();
 
@@ -43,6 +44,8 @@ fn main() {
         .to_string();
     app.add_plugins((
         DefaultPlugins
+            .build()
+            .disable::<LogPlugin>()
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Vibers RS".into(),

@@ -7,7 +7,7 @@
 - **Date**: 2025-03-21
 - **Tags**: [config, ops, deployment]
 - **Decision Type**: architecture_pattern
-- **Related**: [ADR-007, ADR-008, ADR-012, ADR-013]
+- **Related**: [ADR-007, ADR-008, ADR-012, ADR-013, ADR-016]
 - **Supersedes**: []
 - **Superseded By**: []
 ---

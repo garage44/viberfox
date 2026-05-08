@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)] // latitude/longitude kept for future geo display
 pub struct Region {
     pub id: i64,
     pub name: String,
@@ -14,6 +15,7 @@ pub struct Region {
 }
 
 #[derive(Component, Debug, Clone)]
+#[allow(dead_code)] // region_id/name kept for future UI labelling
 pub struct Prim {
     pub id: i64,
     pub region_id: i64,
@@ -63,7 +65,3 @@ impl PrimShape {
         }
     }
 }
-
-
-
-

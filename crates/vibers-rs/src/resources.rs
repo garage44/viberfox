@@ -10,6 +10,7 @@ pub struct Database {
 }
 
 #[derive(Resource, Default)]
+#[allow(dead_code)] // selected_prim_id kept for future selection UI
 pub struct GameState {
     pub selected_prim_id: Option<i64>,
     pub regions_loaded: bool,
@@ -58,6 +59,7 @@ pub struct CameraState {
 }
 
 #[derive(Resource, Default)]
+#[allow(dead_code)] // drag/pan state kept for future mouse interaction
 pub struct MouseState {
     pub last_position: Option<Vec2>,
     pub is_dragging: bool,

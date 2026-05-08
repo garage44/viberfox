@@ -39,5 +39,7 @@ These are **explicit deferrals** to reduce scope creep unless a new goal and ADR
 ## Related
 
 - [principles.md](principles.md) — `P-*`
-- [capability-map.md](capability-map.md) — themes and ADR coverage
+- [roadmap.md](roadmap.md) — **P0/P1/P2** priorities and ADR sequencing
+- [adr-resolution.md](adr-resolution.md) — how deep to document (R0–R3)
+- [capability-map.md](capability-map.md) — themes, priority, ADR coverage
 - [../adr/index.md](../adr/index.md) — decisions

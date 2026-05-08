@@ -27,6 +27,7 @@ impl Default for TileCache {
 
 /// Component to mark regions that need tile textures
 #[derive(Component)]
+#[allow(dead_code)] // lod_level kept for ADR-004 planned LOD
 pub struct RegionTile {
     pub tile_key: TileKey,
     pub lod_level: u32, // 0 = high-res (2x2), 1 = medium-res (1x1), 2 = low-res (1x1)
@@ -48,7 +49,10 @@ pub fn format_osm_tile_url(template: &str, key: &TileKey) -> String {
 }
 
 /// Load a single OSM tile image
-pub fn load_tile_image(key: &TileKey, template: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn load_tile_image(
+    key: &TileKey,
+    template: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let url = format_osm_tile_url(template, key);
     let response = ureq::get(&url).call()?;
     let mut bytes = Vec::new();
@@ -64,11 +68,7 @@ pub fn load_region_tiles(
     tile_url: Res<OsmTileUrlTemplate>,
     region_query: Query<(Entity, &RegionTile), Without<RegionTileTexture>>,
 ) {
-    let template = tile_url
-        .0
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let template = tile_url.0.lock().map(|g| g.clone()).unwrap_or_default();
     for (entity, region_tile) in region_query.iter() {
         let tile_key = region_tile.tile_key.clone();
 
@@ -90,6 +90,7 @@ pub fn load_region_tiles(
             loading.insert(tile_key.clone(), true);
         }
 
+        tracing::info!(tile = %tile_key.to_path(), "fetching OSM tile");
         match load_tile_image(&tile_key, &template) {
             Ok(bytes) => match image::load_from_memory(&bytes) {
                 Ok(img) => {
@@ -125,15 +126,17 @@ pub fn load_region_tiles(
                         let mut loading = tile_cache.loading.lock().unwrap();
                         loading.remove(&tile_key);
                     }
+
+                    tracing::info!(tile = %tile_key.to_path(), "tile loaded and applied");
                 }
                 Err(e) => {
-                    eprintln!("Failed to decode tile image: {}", e);
+                    tracing::error!(tile = %tile_key.to_path(), error = %e, "failed to decode tile image");
                     let mut loading = tile_cache.loading.lock().unwrap();
                     loading.remove(&tile_key);
                 }
             },
             Err(e) => {
-                eprintln!("Failed to load tile {}: {}", tile_key.to_path(), e);
+                tracing::error!(tile = %tile_key.to_path(), error = %e, "failed to fetch OSM tile");
                 let mut loading = tile_cache.loading.lock().unwrap();
                 loading.remove(&tile_key);
             }

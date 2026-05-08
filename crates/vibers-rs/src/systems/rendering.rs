@@ -1,7 +1,7 @@
-use bevy::prelude::*;
-use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
-use crate::components::{Region, Prim, PrimShape};
+use crate::components::{Prim, PrimShape, Region};
 use crate::systems::tile_loader::{RegionTile, TileKey};
+use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
+use bevy::prelude::*;
 use vibe_core::world::REGION_SIZE_METERS;
 
 #[derive(Component)]
@@ -45,7 +45,10 @@ pub fn spawn_regions(
         } else if total_regions == 1 {
             Vec3::new(0.0, 0.0, 0.0)
         } else {
-            let index = region_ids.iter().position(|&id| id == region.id).unwrap_or(0);
+            let index = region_ids
+                .iter()
+                .position(|&id| id == region.id)
+                .unwrap_or(0);
             let row = (index as f32 / grid_size).floor() as i32;
             let col = index % grid_size as usize;
             let spacing = 300.0;
@@ -56,7 +59,7 @@ pub fn spawn_regions(
             )
         };
 
-        tracing::debug!("spawning region '{}' at {:?}", region.name, position);
+        tracing::info!(name = %region.name, position = ?position, "spawning region mesh");
 
         // Create a simple flat box as the region (easier than plane rotation)
         // Box with very small height to act as a flat plane
@@ -74,8 +77,11 @@ pub fn spawn_regions(
         });
 
         // Create tile key for this region
-        let tile_key =
-            TileKey::new(region.tile_x, region.tile_y, region.tile_z.clamp(0, u32::MAX as i64) as u32);
+        let tile_key = TileKey::new(
+            region.tile_x,
+            region.tile_y,
+            region.tile_z.clamp(0, u32::MAX as i64) as u32,
+        );
 
         // Spawn region as a flat box at y=0
         let transform = Transform::from_translation(position);
@@ -94,14 +100,23 @@ pub fn spawn_regions(
     }
 
     if spawned_count > 0 {
-        tracing::debug!("spawned {} region meshes", spawned_count);
+        tracing::info!(count = spawned_count, "spawned region meshes");
     }
 }
 
 /// Update region materials when tile textures are loaded
 pub fn update_region_materials(
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut region_query: Query<(&mut MeshMaterial3d<StandardMaterial>, &crate::systems::tile_loader::RegionTileTexture), (With<RegionMesh>, Changed<crate::systems::tile_loader::RegionTileTexture>)>,
+    mut region_query: Query<
+        (
+            &mut MeshMaterial3d<StandardMaterial>,
+            &crate::systems::tile_loader::RegionTileTexture,
+        ),
+        (
+            With<RegionMesh>,
+            Changed<crate::systems::tile_loader::RegionTileTexture>,
+        ),
+    >,
     images: Res<Assets<Image>>,
 ) {
     for (mut material, tile_texture) in region_query.iter_mut() {
@@ -124,7 +139,11 @@ pub fn spawn_prims(
 ) {
     for (entity, prim, transform) in prim_query.iter() {
         let mesh_handle = match prim.shape {
-            PrimShape::Box => meshes.add(Cuboid::new(transform.scale.x / 2.0, transform.scale.y / 2.0, transform.scale.z / 2.0)),
+            PrimShape::Box => meshes.add(Cuboid::new(
+                transform.scale.x / 2.0,
+                transform.scale.y / 2.0,
+                transform.scale.z / 2.0,
+            )),
             PrimShape::Sphere => meshes.add(Sphere::default()),
             PrimShape::Cylinder => meshes.add(Cylinder::default()),
             PrimShape::Cone => meshes.add(Cylinder::default()), // Use cylinder as cone substitute

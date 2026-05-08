@@ -2,7 +2,7 @@
 
 A Bevy-based 3D virtual world application.
 
-**AI assistants:** see [AGENTS.md](AGENTS.md) for the **meta → ADR → code** workflow and where goals (`G-*`) and principles (`P-*`) live.
+**AI assistants:** see [AGENTS.md](AGENTS.md) for **`docs/meta/`** (abstract + ADRs), roadmap tiers, ADR resolution, and the **meta → ADR → code** workflow.
 
 ## Features
 
@@ -118,7 +118,7 @@ To add a new feature:
 
 ### Architecture
 
-**Strategic foundation** (mission, goals, principles): [docs/architecture/meta/](docs/architecture/meta/). **Decision log** (ADRs): [docs/architecture/adr/](docs/architecture/adr/). See the [architecture README](docs/architecture/README.md) for read order; [ADR index](docs/architecture/adr/index.md) lists decisions (Bevy, SQLite, OSM tiles, networking, etc.).
+**Architecture docs** live under [docs/meta/](docs/meta/): **abstract** (vision, roadmap, ADR resolution) and **adr** (decision log). See [docs/meta/README.md](docs/meta/README.md) for read order; [ADR index](docs/meta/adr/index.md) lists decisions.
 
 ### Project Structure
 

@@ -65,11 +65,7 @@ pub fn init_database(db_path: &str) -> Result<Connection> {
 
 /// Seed a default region (Groningen) if no regions exist
 fn seed_default_region(conn: &Connection) -> Result<()> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM regions",
-        [],
-        |row| row.get(0),
-    )?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM regions", [], |row| row.get(0))?;
 
     if count == 0 {
         use vibe_core::world::{lat_lng_to_tile, REGION_ZOOM_LEVEL};
@@ -99,6 +95,7 @@ fn seed_default_region(conn: &Connection) -> Result<()> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // created_at/updated_at kept for future audit/display
 pub struct RegionRow {
     pub id: i64,
     pub name: String,
@@ -112,6 +109,7 @@ pub struct RegionRow {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // created_at/updated_at kept for future audit/display
 pub struct PrimRow {
     pub id: i64,
     pub region_id: i64,

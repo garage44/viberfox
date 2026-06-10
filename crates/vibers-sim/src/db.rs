@@ -1,6 +1,6 @@
 use anyhow::Context;
 use glam::Vec3;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use vibe_core::world::{lat_lng_to_tile, REGION_ZOOM_LEVEL};
 use vibe_core::{PrimDto, RegionDto};
 
@@ -46,7 +46,9 @@ fn seed_default_region(conn: &Connection) -> anyhow::Result<()> {
 }
 
 pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<PrimDto>)> {
-    let mut stmt = conn.prepare("SELECT id, name, latitude, longitude, tile_x, tile_y, tile_z FROM regions ORDER BY id")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, latitude, longitude, tile_x, tile_y, tile_z FROM regions ORDER BY id",
+    )?;
     let regions = stmt
         .query_map([], |row| {
             Ok(RegionDto {
@@ -67,7 +69,7 @@ pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<Prim
     let mut stmt = conn.prepare(
         "SELECT id, region_id, name, shape, position_x, position_y, position_z,
                 rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z,
-                color_r, color_g, color_b FROM prims ORDER BY id",
+                color_r, color_g, color_b, texture_id FROM prims ORDER BY id",
     )?;
     let prims = stmt
         .query_map([], |row| {
@@ -80,9 +82,379 @@ pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<Prim
                 rotation: Vec3::new(row.get(7)?, row.get(8)?, row.get(9)?),
                 scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
                 color: [row.get(13)?, row.get(14)?, row.get(15)?],
+                texture_id: row.get(16)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok((regions, prims))
+}
+
+/// Create a new prim in the database.
+/// Returns the full PrimDto with server-assigned id.
+/// (ADR-017 Phase 2)
+pub fn insert_prim(
+    conn: &Connection,
+    region_id: i64,
+    position: Vec3,
+    shape: &str,
+) -> anyhow::Result<PrimDto> {
+    // Validate that the region exists
+    let region_exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM regions WHERE id = ?1",
+        rusqlite::params![region_id],
+        |row| row.get(0),
+    )?;
+
+    if !region_exists {
+        return Err(anyhow::anyhow!("region_id {} not found", region_id));
+    }
+
+    // Insert with sensible defaults
+    conn.execute(
+        "INSERT INTO prims (region_id, name, shape, position_x, position_y, position_z,
+                            rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z,
+                            color_r, color_g, color_b, texture_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'), datetime('now'))",
+        rusqlite::params![
+            region_id,
+            "Prim",                   // default name
+            shape,
+            position.x,
+            position.y,
+            position.z,
+            0.0_f32,                  // rotation defaults
+            0.0_f32,
+            0.0_f32,
+            1.0_f32,                  // scale defaults (1.0 = unit size)
+            1.0_f32,
+            1.0_f32,
+            0.5_f32,                  // color defaults (neutral gray)
+            0.5_f32,
+            0.5_f32,
+            None::<String>,           // no texture by default
+        ],
+    )?;
+
+    // Retrieve the newly created prim
+    let id = conn.last_insert_rowid();
+    let prim = select_prim_by_id(conn, id)?
+        .ok_or_else(|| anyhow::anyhow!("failed to retrieve newly inserted prim {}", id))?;
+
+    tracing::debug!(prim_id = id, region_id, shape, "prim created");
+    Ok(prim)
+}
+
+/// Update an existing prim in the database.
+/// Returns the full updated PrimDto, or None if the prim does not exist.
+/// (ADR-017 Phase 2)
+pub fn update_prim(
+    conn: &Connection,
+    prim_id: i64,
+    position: Vec3,
+    rotation: Vec3,
+    scale: Vec3,
+    color: [f32; 3],
+    texture_id: Option<String>,
+    name: &str,
+) -> anyhow::Result<Option<PrimDto>> {
+    // Check if prim exists first
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM prims WHERE id = ?1",
+        rusqlite::params![prim_id],
+        |row| row.get(0),
+    )?;
+
+    if !exists {
+        return Ok(None);
+    }
+
+    // Update all fields
+    conn.execute(
+        "UPDATE prims SET
+            position_x = ?2, position_y = ?3, position_z = ?4,
+            rotation_x = ?5, rotation_y = ?6, rotation_z = ?7,
+            scale_x = ?8, scale_y = ?9, scale_z = ?10,
+            color_r = ?11, color_g = ?12, color_b = ?13,
+            texture_id = ?14,
+            name = ?15,
+            updated_at = datetime('now')
+         WHERE id = ?1",
+        rusqlite::params![
+            prim_id, position.x, position.y, position.z, rotation.x, rotation.y, rotation.z,
+            scale.x, scale.y, scale.z, color[0], color[1], color[2], texture_id, name,
+        ],
+    )?;
+
+    // Retrieve the updated prim
+    let prim = select_prim_by_id(conn, prim_id)?
+        .ok_or_else(|| anyhow::anyhow!("failed to retrieve updated prim {}", prim_id))?;
+
+    tracing::debug!(prim_id, "prim updated");
+    Ok(Some(prim))
+}
+
+/// Delete a prim from the database.
+/// Returns true if a prim was deleted, false if the prim did not exist.
+/// (ADR-017 Phase 2)
+pub fn delete_prim(conn: &Connection, prim_id: i64) -> anyhow::Result<bool> {
+    let rows_affected = conn.execute(
+        "DELETE FROM prims WHERE id = ?1",
+        rusqlite::params![prim_id],
+    )?;
+
+    let deleted = rows_affected > 0;
+    if deleted {
+        tracing::debug!(prim_id, "prim deleted");
+    }
+    Ok(deleted)
+}
+
+/// Helper: retrieve a prim by id (internal use)  (ADR-017 Phase 2)
+fn select_prim_by_id(conn: &Connection, prim_id: i64) -> anyhow::Result<Option<PrimDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, region_id, name, shape, position_x, position_y, position_z,
+                rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z,
+                color_r, color_g, color_b, texture_id FROM prims WHERE id = ?1",
+    )?;
+
+    let prim = stmt
+        .query_row(rusqlite::params![prim_id], |row| {
+            Ok(PrimDto {
+                id: row.get(0)?,
+                region_id: row.get(1)?,
+                name: row.get(2)?,
+                shape: row.get(3)?,
+                position: Vec3::new(row.get(4)?, row.get(5)?, row.get(6)?),
+                rotation: Vec3::new(row.get(7)?, row.get(8)?, row.get(9)?),
+                scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
+                color: [row.get(13)?, row.get(14)?, row.get(15)?],
+                texture_id: row.get(16)?,
+            })
+        })
+        .optional()?;
+
+    Ok(prim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> anyhow::Result<(Connection, tempfile::TempDir)> {
+        let tempdir = tempfile::TempDir::new()?;
+        let db_path = tempdir.path().join("test.db");
+        let conn = open_and_migrate(db_path.to_str().unwrap())?;
+        Ok((conn, tempdir))
+    }
+
+    #[test]
+    fn test_insert_prim() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        // Get the default region (Groningen from seed)
+        let region_id: i64 =
+            conn.query_row("SELECT id FROM regions LIMIT 1", [], |row| row.get(0))?;
+
+        // Create a prim
+        let prim = insert_prim(&conn, region_id, Vec3::new(10.0, 5.0, 20.0), "box")?;
+
+        // Verify the prim was created
+        assert!(prim.id > 0);
+        assert_eq!(prim.region_id, region_id);
+        assert_eq!(prim.name, "Prim");
+        assert_eq!(prim.shape, "box");
+        assert_eq!(prim.position, Vec3::new(10.0, 5.0, 20.0));
+        assert_eq!(prim.rotation, Vec3::ZERO);
+        assert_eq!(prim.scale, Vec3::ONE);
+        assert_eq!(prim.color, [0.5, 0.5, 0.5]);
+        assert_eq!(prim.texture_id, None);
+
+        // Verify it's in the database
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM prims WHERE id = ?1",
+            rusqlite::params![prim.id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_prim_invalid_region() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        // Try to create a prim with non-existent region
+        let result = insert_prim(&conn, 9999, Vec3::ZERO, "box");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_prim() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        let region_id: i64 =
+            conn.query_row("SELECT id FROM regions LIMIT 1", [], |row| row.get(0))?;
+
+        // Create a prim
+        let prim = insert_prim(&conn, region_id, Vec3::ZERO, "box")?;
+
+        // Update it
+        let updated = update_prim(
+            &conn,
+            prim.id,
+            Vec3::new(15.0, 10.0, 25.0),
+            Vec3::new(45.0, 90.0, 0.0),
+            Vec3::new(2.0, 2.0, 2.0),
+            [1.0, 0.0, 0.0],
+            Some("brick".to_string()),
+            "Updated Prim",
+        )?
+        .ok_or_else(|| anyhow::anyhow!("prim not found after update"))?;
+
+        // Verify the update
+        assert_eq!(updated.id, prim.id);
+        assert_eq!(updated.position, Vec3::new(15.0, 10.0, 25.0));
+        assert_eq!(updated.rotation, Vec3::new(45.0, 90.0, 0.0));
+        assert_eq!(updated.scale, Vec3::new(2.0, 2.0, 2.0));
+        assert_eq!(updated.color, [1.0, 0.0, 0.0]);
+        assert_eq!(updated.texture_id, Some("brick".to_string()));
+        assert_eq!(updated.name, "Updated Prim");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_prim_nonexistent() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        // Try to update a non-existent prim
+        let result = update_prim(
+            &conn,
+            9999,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE,
+            [0.5, 0.5, 0.5],
+            None,
+            "test",
+        )?;
+
+        assert!(result.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_prim() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        let region_id: i64 =
+            conn.query_row("SELECT id FROM regions LIMIT 1", [], |row| row.get(0))?;
+
+        // Create a prim
+        let prim = insert_prim(&conn, region_id, Vec3::ZERO, "box")?;
+
+        // Delete it
+        let deleted = delete_prim(&conn, prim.id)?;
+        assert!(deleted);
+
+        // Verify it's gone
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM prims WHERE id = ?1",
+            rusqlite::params![prim.id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_prim_nonexistent() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        // Try to delete a non-existent prim
+        let deleted = delete_prim(&conn, 9999)?;
+        assert!(!deleted);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_texture_roundtrip() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        let region_id: i64 =
+            conn.query_row("SELECT id FROM regions LIMIT 1", [], |row| row.get(0))?;
+
+        // Create a prim with a texture
+        let prim = insert_prim(&conn, region_id, Vec3::ZERO, "sphere")?;
+
+        // Update it with a texture
+        let updated = update_prim(
+            &conn,
+            prim.id,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ONE,
+            [0.5, 0.5, 0.5],
+            Some("grass".to_string()),
+            "Prim",
+        )?
+        .ok_or_else(|| anyhow::anyhow!("prim not found"))?;
+
+        // Verify texture persists
+        assert_eq!(updated.texture_id, Some("grass".to_string()));
+
+        // Reload from DB to verify persistence
+        let reloaded =
+            select_prim_by_id(&conn, prim.id)?.ok_or_else(|| anyhow::anyhow!("prim not found"))?;
+
+        assert_eq!(reloaded.texture_id, Some("grass".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiple_prims_isolation() -> anyhow::Result<()> {
+        let (conn, _temp) = test_db()?;
+
+        let region_id: i64 =
+            conn.query_row("SELECT id FROM regions LIMIT 1", [], |row| row.get(0))?;
+
+        // Create two prims
+        let prim1 = insert_prim(&conn, region_id, Vec3::new(0.0, 0.0, 0.0), "box")?;
+        let prim2 = insert_prim(&conn, region_id, Vec3::new(10.0, 0.0, 0.0), "sphere")?;
+
+        // Update one
+        update_prim(
+            &conn,
+            prim1.id,
+            Vec3::new(5.0, 0.0, 0.0),
+            Vec3::ZERO,
+            Vec3::ONE,
+            [1.0, 0.0, 0.0],
+            None,
+            "Red Box",
+        )?;
+
+        // Delete the other
+        delete_prim(&conn, prim2.id)?;
+
+        // Verify prim1 was updated and prim2 was deleted
+        let updated1 = select_prim_by_id(&conn, prim1.id)?
+            .ok_or_else(|| anyhow::anyhow!("prim1 not found"))?;
+        assert_eq!(updated1.name, "Red Box");
+        assert_eq!(updated1.color, [1.0, 0.0, 0.0]);
+
+        let prim2_exists = select_prim_by_id(&conn, prim2.id)?;
+        assert!(prim2_exists.is_none());
+
+        Ok(())
+    }
 }

@@ -10,11 +10,38 @@ pub struct Database {
 }
 
 #[derive(Resource, Default)]
-#[allow(dead_code)] // selected_prim_id kept for future selection UI
 pub struct GameState {
     pub selected_prim_id: Option<i64>,
     pub regions_loaded: bool,
     pub prims_loaded: bool,
+    pub editing_prim_id: Option<i64>,
+    pub pending_prim_save: Option<EditDialogState>,
+    pub prim_to_delete: Option<i64>,
+}
+
+/// Context menu state for prim interaction (right-click menus)
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct ContextMenuState {
+    pub visible: bool,
+    pub screen_pos: Vec2,
+    pub hit_point: Vec3,
+    pub hit_prim_id: Option<i64>,
+    pub hit_region_id: Option<i64>,
+}
+
+/// Edit dialog state for prim properties
+#[derive(Resource, Default, Debug, Clone)]
+pub struct EditDialogState {
+    pub visible: bool,
+    pub is_new: bool,
+    pub prim_id: Option<i64>,
+    pub name: String,
+    pub shape: String,
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: [f32; 3],
+    pub color: [f32; 3],
+    pub texture_id: Option<String>,
 }
 
 #[derive(Resource)]

@@ -2,14 +2,12 @@ use crate::config::SimConfig;
 use crate::state::SimWorld;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use vibe_core::{
-    decode_app_frame, encode_app_frame, NetMessage, ProtocolError, PROTOCOL_VERSION,
-};
+use vibe_core::{decode_app_frame, encode_app_frame, NetMessage, ProtocolError, PROTOCOL_VERSION};
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
 /// ADR-012: simple per-connection rate limits (token-bucket style, fixed interval).
@@ -21,6 +19,8 @@ pub async fn handle_connection(
     world: Arc<RwLock<SimWorld>>,
     config: Arc<SimConfig>,
     mut snap_rx: broadcast::Receiver<Vec<u8>>,
+    tx_snap: broadcast::Sender<Vec<u8>>,
+    _conn: Arc<Mutex<rusqlite::Connection>>,
 ) -> anyhow::Result<()> {
     let mut framed = Framed::new(
         stream,
@@ -41,9 +41,7 @@ pub async fn handle_connection(
         client_token,
     } = msg
     else {
-        return Err(
-            ProtocolError::ExpectedHello(format!("{msg:?}").into()).into(),
-        );
+        return Err(ProtocolError::ExpectedHello(format!("{msg:?}").into()).into());
     };
     if protocol_version != PROTOCOL_VERSION {
         let err = encode_app_frame(&NetMessage::ServerError {
@@ -118,11 +116,90 @@ pub async fn handle_connection(
                             NetMessage::ClientHello { .. } => {
                                 tracing::warn!("duplicate hello ignored");
                             }
+                            NetMessage::CreatePrim { request_id, region_id, position, shape } => {
+                                let mut w = world.write().await;
+                                match w.add_prim(region_id, position, &shape) {
+                                    Ok(prim) => {
+                                        // Broadcast PrimUpsert to all clients
+                                        let broadcast_msg = encode_app_frame(&NetMessage::PrimUpsert { prim })?;
+                                        let _ = tx_snap.send(broadcast_msg);
+                                        tracing::debug!(request_id, region_id, "prim created and broadcast");
+                                    }
+                                    Err(e) => {
+                                        // Send ServerError back to client
+                                        let error_msg = encode_app_frame(&NetMessage::ServerError {
+                                            request_id,
+                                            code: 400,
+                                            message: e.clone(),
+                                        })?;
+                                        drop(w);
+                                        framed.send(Bytes::from(error_msg)).await?;
+                                        tracing::warn!(request_id, error = %e, "prim creation failed");
+                                    }
+                                }
+                            }
+                            NetMessage::UpdatePrim { request_id, prim_id, position, rotation, scale, color, texture_id, name } => {
+                                let mut w = world.write().await;
+                                match w.update_prim(prim_id, position, rotation, scale, color, texture_id, &name) {
+                                    Ok(prim) => {
+                                        // Broadcast PrimUpsert to all clients
+                                        let broadcast_msg = encode_app_frame(&NetMessage::PrimUpsert { prim })?;
+                                        let _ = tx_snap.send(broadcast_msg);
+                                        tracing::debug!(request_id, prim_id, "prim updated and broadcast");
+                                    }
+                                    Err(e) => {
+                                        // Send ServerError back to client
+                                        let error_msg = encode_app_frame(&NetMessage::ServerError {
+                                            request_id,
+                                            code: 404,
+                                            message: e.clone(),
+                                        })?;
+                                        drop(w);
+                                        framed.send(Bytes::from(error_msg)).await?;
+                                        tracing::warn!(request_id, prim_id, error = %e, "prim update failed");
+                                    }
+                                }
+                            }
+                            NetMessage::DeletePrim { request_id, prim_id } => {
+                                let mut w = world.write().await;
+                                match w.remove_prim(prim_id) {
+                                    Ok(deleted) => {
+                                        if deleted {
+                                            // Broadcast PrimRemoved to all clients
+                                            let broadcast_msg = encode_app_frame(&NetMessage::PrimRemoved { id: prim_id })?;
+                                            let _ = tx_snap.send(broadcast_msg);
+                                            tracing::debug!(request_id, prim_id, "prim deleted and broadcast");
+                                        } else {
+                                            // Send ServerError back to client (not found)
+                                            let error_msg = encode_app_frame(&NetMessage::ServerError {
+                                                request_id,
+                                                code: 404,
+                                                message: format!("prim {} not found", prim_id),
+                                            })?;
+                                            drop(w);
+                                            framed.send(Bytes::from(error_msg)).await?;
+                                            tracing::warn!(request_id, prim_id, "prim not found for deletion");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Send ServerError back to client
+                                        let error_msg = encode_app_frame(&NetMessage::ServerError {
+                                            request_id,
+                                            code: 500,
+                                            message: e.clone(),
+                                        })?;
+                                        drop(w);
+                                        framed.send(Bytes::from(error_msg)).await?;
+                                        tracing::warn!(request_id, prim_id, error = %e, "prim deletion failed");
+                                    }
+                                }
+                            }
                             NetMessage::PrimRemoved { .. }
                             | NetMessage::WorldSnapshot { .. }
                             | NetMessage::ServerHelloAck { .. }
-                            | NetMessage::ServerError { .. } => {
-                                tracing::debug!(?msg, "ignored message from client");
+                            | NetMessage::ServerError { .. }
+                            | NetMessage::PrimUpsert { .. } => {
+                                tracing::debug!("ignored message from client");
                             }
                         }
                     }
@@ -174,5 +251,162 @@ pub async fn tick_loop(
             }
             Err(e) => tracing::error!("snapshot encode: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    fn setup_test_world() -> (
+        Arc<RwLock<SimWorld>>,
+        Arc<Mutex<rusqlite::Connection>>,
+        tempfile::TempDir,
+    ) {
+        // Create a temporary test database
+        let tempdir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let db_path = tempdir.path().join("test.db");
+        let conn = crate::db::open_and_migrate(db_path.to_str().unwrap())
+            .expect("failed to open and migrate db");
+        let (regions, prims) = crate::db::load_world(&conn).expect("failed to load world");
+        let conn = Arc::new(Mutex::new(conn));
+
+        let world = Arc::new(RwLock::new(SimWorld::new(
+            regions,
+            prims,
+            50.0,
+            conn.clone(),
+        )));
+
+        (world, conn, tempdir)
+    }
+
+    #[tokio::test]
+    async fn test_create_prim_mutation() -> anyhow::Result<()> {
+        let (world, _conn, _tempdir) = setup_test_world();
+
+        // Get the default region ID
+        let region_id = {
+            let w = world.read().await;
+            w.regions()[0].id
+        };
+
+        // Create a prim
+        let prim_result = {
+            let mut w = world.write().await;
+            w.add_prim(region_id, Vec3::new(10.0, 5.0, 20.0), "box")
+        };
+
+        assert!(prim_result.is_ok(), "prim creation should succeed");
+        let created_prim = prim_result.map_err(|e| anyhow::anyhow!(e))?;
+        assert!(created_prim.id > 0, "created prim should have positive id");
+        assert_eq!(created_prim.region_id, region_id);
+        assert_eq!(created_prim.shape, "box");
+        assert_eq!(created_prim.position, Vec3::new(10.0, 5.0, 20.0));
+
+        // Verify it's in the in-memory list
+        let prims_count = {
+            let w = world.read().await;
+            w.prims().len()
+        };
+        assert!(prims_count > 0, "world should contain at least one prim");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_prim_mutation() -> anyhow::Result<()> {
+        let (world, _conn, _tempdir) = setup_test_world();
+
+        // Get the default region ID and create a prim first
+        let region_id = {
+            let w = world.read().await;
+            w.regions()[0].id
+        };
+
+        let prim_id = {
+            let mut w = world.write().await;
+            let prim = w
+                .add_prim(region_id, Vec3::ZERO, "sphere")
+                .map_err(|e| anyhow::anyhow!(e))?;
+            prim.id
+        };
+
+        // Update the prim
+        let update_result = {
+            let mut w = world.write().await;
+            w.update_prim(
+                prim_id,
+                Vec3::new(15.0, 10.0, 25.0),
+                Vec3::new(45.0, 90.0, 0.0),
+                Vec3::new(2.0, 2.0, 2.0),
+                [1.0, 0.0, 0.0],
+                Some("brick".to_string()),
+                "Updated Prim",
+            )
+        };
+
+        assert!(update_result.is_ok(), "prim update should succeed");
+        let updated_prim = update_result.map_err(|e| anyhow::anyhow!(e))?;
+        assert_eq!(updated_prim.id, prim_id);
+        assert_eq!(updated_prim.position, Vec3::new(15.0, 10.0, 25.0));
+        assert_eq!(updated_prim.rotation, Vec3::new(45.0, 90.0, 0.0));
+        assert_eq!(updated_prim.scale, Vec3::new(2.0, 2.0, 2.0));
+        assert_eq!(updated_prim.color, [1.0, 0.0, 0.0]);
+        assert_eq!(updated_prim.texture_id, Some("brick".to_string()));
+        assert_eq!(updated_prim.name, "Updated Prim");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_prim_mutation() -> anyhow::Result<()> {
+        let (world, _conn, _tempdir) = setup_test_world();
+
+        // Get the default region ID and create a prim first
+        let region_id = {
+            let w = world.read().await;
+            w.regions()[0].id
+        };
+
+        let prim_id = {
+            let mut w = world.write().await;
+            let prim = w
+                .add_prim(region_id, Vec3::ZERO, "cube")
+                .map_err(|e| anyhow::anyhow!(e))?;
+            prim.id
+        };
+
+        // Count prims before deletion
+        let count_before = {
+            let w = world.read().await;
+            w.prims().len()
+        };
+
+        // Delete the prim
+        let delete_result = {
+            let mut w = world.write().await;
+            w.remove_prim(prim_id)
+        };
+
+        assert!(delete_result.is_ok(), "prim deletion should succeed");
+        assert!(
+            delete_result.map_err(|e| anyhow::anyhow!(e))?,
+            "prim should be deleted"
+        );
+
+        // Count prims after deletion
+        let count_after = {
+            let w = world.read().await;
+            w.prims().len()
+        };
+
+        assert!(
+            count_after < count_before,
+            "prim count should decrease after deletion"
+        );
+
+        Ok(())
     }
 }

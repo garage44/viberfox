@@ -35,12 +35,13 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = db::open_and_migrate(&config.database_path)?;
     let (regions, prims) = db::load_world(&conn)?;
-    drop(conn);
+    let conn = Arc::new(std::sync::Mutex::new(conn));
 
     let world = Arc::new(RwLock::new(state::SimWorld::new(
         regions,
         prims,
         config.aoi_radius,
+        conn.clone(),
     )));
 
     let (tx_snap, _) = broadcast::channel::<Vec<u8>>(256);
@@ -57,8 +58,10 @@ async fn main() -> anyhow::Result<()> {
         let world_c = world.clone();
         let cfg_c = config.clone();
         let rx = tx_snap.subscribe();
+        let tx_c = tx_snap.clone();
+        let conn_c = conn.clone();
         tokio::spawn(async move {
-            if let Err(e) = net::handle_connection(stream, world_c, cfg_c, rx).await {
+            if let Err(e) = net::handle_connection(stream, world_c, cfg_c, rx, tx_c, conn_c).await {
                 tracing::warn!(%addr, "client ended: {e:#}");
             }
         });

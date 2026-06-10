@@ -35,14 +35,14 @@ bevy = { version = "0.16", default-features = false, features = [
     "wayland",
     "x11",
 ] }
-# `detection` spawns the skybox in PostUpdate, which can hit Bevy 0.16 material specialization panics
-# (see bevy#18980 / #19064). We spawn the skybox manually in Startup instead.
 bevy_atmosphere = { version = "0.13", default-features = false, features = [
     "nishita",
     "procedural",
 ] }
 bevy_image = "0.16"
 bytes = "1.9"
+egui = "0.31"
+egui-wgpu = { version = "0.31", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 figment = { version = "0.10", features = ["toml", "env"] }
 glam = { version = "0.29", features = ["serde"] }

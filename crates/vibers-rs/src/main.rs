@@ -14,10 +14,11 @@ mod utils;
 
 use components::Avatar;
 use resources::{
-    AvatarState, CameraState, ConnectAddr, Database, GameState, LocalAvatarSimId, MouseState,
-    OsmTileUrlTemplate,
+    AvatarState, CameraState, ConnectAddr, ContextMenuState, Database, EditDialogState, GameState,
+    LocalAvatarSimId, MouseState, OsmTileUrlTemplate,
 };
 use systems::*;
+use systems::egui_manager::EguiPlugin;
 
 #[derive(Parser, Debug)]
 #[command(name = "vibers-rs")]
@@ -42,7 +43,7 @@ fn main() {
         .join("../../assets")
         .display()
         .to_string();
-    app.add_plugins((
+    app.add_plugins(
         DefaultPlugins
             .build()
             .disable::<LogPlugin>()
@@ -58,8 +59,9 @@ fn main() {
                 file_path: asset_dir,
                 ..default()
             }),
-        AtmospherePlugin,
-    ))
+    )
+    .add_plugins(EguiPlugin)
+    .add_plugins(AtmospherePlugin)
     .insert_resource(AtmosphereModel::default())
     .init_resource::<GameState>()
     .init_resource::<AvatarState>()
@@ -67,7 +69,10 @@ fn main() {
     .init_resource::<CameraState>()
     .init_resource::<MouseState>()
     .init_resource::<systems::tile_loader::TileCache>()
-    .init_resource::<OsmTileUrlTemplate>();
+    .init_resource::<OsmTileUrlTemplate>()
+    .init_resource::<ContextMenuState>()
+    .init_resource::<EditDialogState>()
+    .init_resource::<systems::gizmo::GizmoState>();
 
     if let Some(addr) = cli.connect {
         app.insert_resource(ConnectAddr(addr));
@@ -127,6 +132,34 @@ fn main() {
             avatar::update_fox_animation.after(avatar::handle_avatar_movement),
             avatar::update_remote_fox_animation.after(avatar::tick_remote_avatar_motion_hint),
             systems::debug::debug_region_entities.after(rendering::spawn_regions),
+        ),
+    )
+    // Phase 4: Prim selection and raycasting
+    .add_systems(
+        Update,
+        (
+            systems::picking::prim_picking,
+            systems::picking::highlight_selected_prim,
+            systems::picking::unhighlight_deselected_prim,
+        ),
+    )
+    // Phase 5: Context menu and edit dialog
+    .add_systems(
+        Update,
+        (
+            systems::ui::render_context_menu,
+            systems::ui::render_edit_dialog,
+            systems::ui::send_prim_mutations,
+            systems::ui::render_ui_overlay,
+        ),
+    )
+    // Phase 6: Transform gizmos
+    .add_systems(
+        Update,
+        (
+            systems::gizmo::handle_gizmo_mode_input,
+            systems::gizmo::render_gizmo_visuals,
+            systems::gizmo::handle_gizmo_interaction,
         ),
     );
 

@@ -27,7 +27,11 @@ pub struct Prim {
 #[derive(Component, Debug, Clone)]
 pub struct Avatar;
 
-/// Another client’s avatar (sim id from `WorldSnapshot`); same fox mesh as [`Avatar`].
+/// Marker component for a prim that is currently selected (for editing).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Selected;
+
+/// Another client's avatar (sim id from `WorldSnapshot`); same fox mesh as [`Avatar`].
 /// `net_*` is authoritative each tick; [`crate::systems::avatar::smooth_remote_avatars`] blends `Transform`.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RemoteAvatar {

@@ -27,4 +27,6 @@ ureq.workspace = true
 uuid.workspace = true
 vibe_core = { path = "../vibe_core" }
 bytes.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink", "async-await"] }

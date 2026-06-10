@@ -1,7 +1,11 @@
 pub mod avatar;
 pub mod database;
 pub mod debug;
+pub mod egui_manager;
 pub mod free_camera;
+pub mod gizmo;
 pub mod network;
+pub mod picking;
 pub mod rendering;
 pub mod tile_loader;
+pub mod ui;

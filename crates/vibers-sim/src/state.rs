@@ -1,5 +1,6 @@
 use glam::Vec3;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use vibe_core::{snap_yaw_continuation, AvatarStateDto, NetMessage, PrimDto, RegionDto};
 
 struct AvatarSim {
@@ -18,10 +19,17 @@ pub struct SimWorld {
     next_avatar_id: u64,
     observer: Vec3,
     aoi_radius_sq: f32,
+    /// Database connection for prim mutations (Phase 3).
+    conn: Arc<Mutex<rusqlite::Connection>>,
 }
 
 impl SimWorld {
-    pub fn new(mut regions: Vec<RegionDto>, prims: Vec<PrimDto>, aoi_radius: f32) -> Self {
+    pub fn new(
+        mut regions: Vec<RegionDto>,
+        prims: Vec<PrimDto>,
+        aoi_radius: f32,
+        conn: Arc<Mutex<rusqlite::Connection>>,
+    ) -> Self {
         let mut region_sim_origin = HashMap::new();
         let n = regions.len().max(1);
         let grid_size = (n as f32).sqrt().ceil() as usize;
@@ -52,6 +60,7 @@ impl SimWorld {
             next_avatar_id: 1,
             observer: Vec3::ZERO,
             aoi_radius_sq: aoi_radius * aoi_radius,
+            conn,
         }
     }
 
@@ -83,6 +92,18 @@ impl SimWorld {
 
     pub fn set_observer(&mut self, p: Vec3) {
         self.observer = p;
+    }
+
+    /// Returns a reference to the regions (for testing).
+    #[cfg(test)]
+    pub fn regions(&self) -> &[RegionDto] {
+        &self.regions
+    }
+
+    /// Returns a reference to the prims (for testing).
+    #[cfg(test)]
+    pub fn prims(&self) -> &[PrimDto] {
+        &self.prims
     }
 
     pub fn apply_intent(
@@ -170,5 +191,92 @@ impl SimWorld {
             prims,
             avatars,
         }
+    }
+
+    /// Create a new prim in the world (Phase 3).
+    /// Persists to database and updates in-memory list.
+    /// Returns the created PrimDto on success, or ServerError on failure.
+    /// (ADR-017 Phase 3)
+    pub fn add_prim(
+        &mut self,
+        region_id: i64,
+        position: Vec3,
+        shape: &str,
+    ) -> Result<PrimDto, String> {
+        // Call db::insert_prim with a minimal lock
+        let prim = {
+            let conn_guard = self
+                .conn
+                .lock()
+                .map_err(|e| format!("failed to acquire db lock: {}", e))?;
+            crate::db::insert_prim(&conn_guard, region_id, position, shape)
+                .map_err(|e| format!("insert_prim failed: {}", e))?
+        };
+        // Add to in-memory list
+        self.prims.push(prim.clone());
+        Ok(prim)
+    }
+
+    /// Update an existing prim in the world (Phase 3).
+    /// Persists to database and updates in-memory list.
+    /// Returns the updated PrimDto on success, or ServerError if prim not found.
+    /// (ADR-017 Phase 3)
+    pub fn update_prim(
+        &mut self,
+        prim_id: i64,
+        position: Vec3,
+        rotation: Vec3,
+        scale: Vec3,
+        color: [f32; 3],
+        texture_id: Option<String>,
+        name: &str,
+    ) -> Result<PrimDto, String> {
+        // Call db::update_prim with a minimal lock
+        let prim = {
+            let conn_guard = self
+                .conn
+                .lock()
+                .map_err(|e| format!("failed to acquire db lock: {}", e))?;
+            crate::db::update_prim(
+                &conn_guard,
+                prim_id,
+                position,
+                rotation,
+                scale,
+                color,
+                texture_id,
+                name,
+            )
+            .map_err(|e| format!("update_prim failed: {}", e))?
+            .ok_or_else(|| format!("prim {} not found", prim_id))?
+        };
+        // Update in-memory list
+        if let Some(pos) = self.prims.iter().position(|p| p.id == prim_id) {
+            self.prims[pos] = prim.clone();
+        }
+        Ok(prim)
+    }
+
+    /// Delete a prim from the world (Phase 3).
+    /// Persists deletion to database and removes from in-memory list.
+    /// Returns true if the prim was deleted, false if not found.
+    /// (ADR-017 Phase 3)
+    pub fn remove_prim(&mut self, prim_id: i64) -> Result<bool, String> {
+        // Call db::delete_prim with a minimal lock
+        let deleted = {
+            let conn_guard = self
+                .conn
+                .lock()
+                .map_err(|e| format!("failed to acquire db lock: {}", e))?;
+            crate::db::delete_prim(&conn_guard, prim_id)
+                .map_err(|e| format!("delete_prim failed: {}", e))?
+        };
+        // Remove from in-memory list if it was deleted
+        if deleted {
+            if let Some(pos) = self.prims.iter().position(|p| p.id == prim_id) {
+                self.prims.remove(pos);
+            }
+        }
+        Ok(deleted)
     }
 }

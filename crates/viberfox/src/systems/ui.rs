@@ -151,12 +151,12 @@ pub fn render_edit_dialog(
 
             ui.separator();
 
-            // Position fields
+            // Position fields (Bevy is Y-up: Y is vertical, X/Z are the ground plane)
             ui.label("Position:");
             ui.horizontal(|ui| {
                 ui.label("X:");
                 ui.add(egui::DragValue::new(&mut edit_dialog.position[0]).speed(0.1));
-                ui.label("Y:");
+                ui.label("Y (up):");
                 ui.add(egui::DragValue::new(&mut edit_dialog.position[1]).speed(0.1));
                 ui.label("Z:");
                 ui.add(egui::DragValue::new(&mut edit_dialog.position[2]).speed(0.1));

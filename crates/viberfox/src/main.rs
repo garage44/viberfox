@@ -17,8 +17,8 @@ use resources::{
     AvatarState, CameraState, ConnectAddr, ContextMenuState, Database, EditDialogState, GameState,
     LocalAvatarSimId, MouseState, OsmTileUrlTemplate,
 };
-use systems::*;
 use systems::egui_manager::EguiPlugin;
+use systems::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "viberfox")]
@@ -49,7 +49,7 @@ fn main() {
             .disable::<LogPlugin>()
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Vibers RS".into(),
+                    title: "Viberfox".into(),
                     resolution: (1280.0, 720.0).into(),
                     ..default()
                 }),
@@ -149,10 +149,8 @@ fn main() {
         (
             systems::ui::render_context_menu,
             systems::ui::render_edit_dialog,
-            systems::ui::apply_live_prim_edits
-                .after(systems::ui::render_edit_dialog),
-            systems::ui::send_prim_mutations
-                .after(systems::ui::render_edit_dialog),
+            systems::ui::apply_live_prim_edits.after(systems::ui::render_edit_dialog),
+            systems::ui::send_prim_mutations.after(systems::ui::render_edit_dialog),
         ),
     )
     // Phase 6: Transform gizmos

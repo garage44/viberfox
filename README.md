@@ -1,4 +1,4 @@
-# Vibe-RS
+# Viberfox
 
 A networked 3D virtual world built with Bevy and Rust. Walk around a map-anchored world, place and edit 3D objects, and share the space with others in real time.
 

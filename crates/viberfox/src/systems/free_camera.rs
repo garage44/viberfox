@@ -5,6 +5,7 @@ use bevy_atmosphere::prelude::*;
 use bevy_atmosphere::skybox::{self, AtmosphereSkyBoxMaterial};
 
 use crate::resources::{AvatarState, CameraState, CameraMode};
+use crate::systems::egui_manager::EguiManager;
 use crate::systems::gizmo::GizmoState;
 use crate::systems::rendering::RegionMesh;
 
@@ -81,6 +82,7 @@ pub fn camera_controls(
     time: Res<Time>,
     region_mesh_query: Query<&GlobalTransform, With<RegionMesh>>,
     gizmo_state: Res<GizmoState>,
+    egui_manager: Res<EguiManager>,
 ) {
     if camera_query.is_empty() {
         return;
@@ -102,10 +104,9 @@ pub fn camera_controls(
                 camera_state.distance = camera_state.distance.max(2.0).min(100.0);
             }
 
-            // Handle mouse drag for rotation (suppressed while a gizmo axis is being dragged).
-            if gizmo_state.active_axis.is_some() {
+            // Handle mouse drag for rotation (suppressed while egui or gizmo has the pointer).
+            if gizmo_state.active_axis.is_some() || egui_manager.ctx.wants_pointer_input() {
                 camera_state.pan_offset = None;
-                // Drain events so they don't accumulate.
                 cursor_moved_events.clear();
             } else if mouse_input.pressed(MouseButton::Left) {
                 for event in cursor_moved_events.read() {
@@ -152,8 +153,8 @@ pub fn camera_controls(
             let mut rotation_delta = Vec2::ZERO;
 
             // Mouse look (left mouse button — right is reserved for context menu).
-            // Suppressed while a gizmo axis is being dragged.
-            if gizmo_state.active_axis.is_some() {
+            // Suppressed while egui or gizmo has the pointer.
+            if gizmo_state.active_axis.is_some() || egui_manager.ctx.wants_pointer_input() {
                 camera_state.pan_offset = None;
                 cursor_moved_events.clear();
             } else if mouse_input.pressed(MouseButton::Left) {

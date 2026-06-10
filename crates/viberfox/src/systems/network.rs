@@ -71,7 +71,7 @@ async fn client_loop(
 
     let hello = encode_app_frame(&NetMessage::ClientHello {
         protocol_version: PROTOCOL_VERSION,
-        client_token: format!("vibers-rs-{}", uuid::Uuid::new_v4()),
+        client_token: format!("viberfox-{}", uuid::Uuid::new_v4()),
     })?;
     framed.send(Bytes::from(hello)).await?;
 

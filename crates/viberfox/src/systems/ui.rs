@@ -5,6 +5,7 @@
 use super::egui_manager::EguiManager;
 use crate::components::{Prim, PrimShape, Region, Selected};
 use crate::resources::{ContextMenuState, Database, EditDialogState, GameState};
+use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use egui::Window;
 
@@ -46,17 +47,26 @@ pub fn render_context_menu(
                             edit_dialog.prim_id = Some(prim_id);
                             edit_dialog.is_new = false;
                             edit_dialog.name = prim.name.clone();
-                            edit_dialog.color = {
+                            let color = {
                                 let c = prim.color.to_linear();
                                 [c.red, c.green, c.blue]
                             };
-                            edit_dialog.shape = format!("{:?}", prim.shape).to_lowercase();
+                            edit_dialog.color = color;
+                            let shape = format!("{:?}", prim.shape).to_lowercase();
+                            edit_dialog.shape = shape.clone();
                             let pos = transform.translation;
                             edit_dialog.position = [pos.x, pos.y, pos.z];
                             let rot = transform.rotation.to_euler(EulerRot::XYZ);
                             edit_dialog.rotation = [rot.0, rot.1, rot.2];
-                            let scale = transform.scale;
-                            edit_dialog.scale = [scale.x, scale.y, scale.z];
+                            let scale_v = transform.scale;
+                            edit_dialog.scale = [scale_v.x, scale_v.y, scale_v.z];
+                            // Snapshot for Cancel revert.
+                            edit_dialog.original_name = prim.name.clone();
+                            edit_dialog.original_color = color;
+                            edit_dialog.original_shape = shape;
+                            edit_dialog.original_position = edit_dialog.position;
+                            edit_dialog.original_rotation = edit_dialog.rotation;
+                            edit_dialog.original_scale = edit_dialog.scale;
                             edit_dialog.visible = true;
                             break;
                         }
@@ -220,6 +230,7 @@ pub fn render_edit_dialog(
                 }
 
                 if ui.button("Cancel (ESC)").clicked() {
+                    push_revert(&mut game_state, &edit_dialog);
                     edit_dialog.visible = false;
                     game_state.editing_prim_id = None;
                 }
@@ -233,8 +244,84 @@ pub fn render_edit_dialog(
         });
 
     if !dialog_open {
+        push_revert(&mut game_state, &edit_dialog);
         edit_dialog.visible = false;
         game_state.editing_prim_id = None;
+    }
+}
+
+/// Sync dialog values → prim entity every frame while the edit dialog is open.
+/// This gives live preview; Save persists to DB, Cancel reverts via `pending_prim_revert`.
+pub fn apply_live_prim_edits(
+    edit_dialog: Res<EditDialogState>,
+    game_state: Res<GameState>,
+    mut prim_query: Query<(
+        &mut Prim,
+        &mut Transform,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+    )>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !edit_dialog.visible || edit_dialog.is_new {
+        return;
+    }
+    let Some(prim_id) = game_state.editing_prim_id else {
+        return;
+    };
+    for (mut prim, mut transform, mat_handle) in prim_query.iter_mut() {
+        if prim.id != prim_id {
+            continue;
+        }
+        transform.translation = Vec3::new(
+            edit_dialog.position[0],
+            edit_dialog.position[1],
+            edit_dialog.position[2],
+        );
+        transform.rotation = Quat::from_euler(
+            EulerRot::XYZ,
+            edit_dialog.rotation[0],
+            edit_dialog.rotation[1],
+            edit_dialog.rotation[2],
+        );
+        transform.scale = Vec3::new(
+            edit_dialog.scale[0],
+            edit_dialog.scale[1],
+            edit_dialog.scale[2],
+        );
+        let new_color =
+            Color::srgb(edit_dialog.color[0], edit_dialog.color[1], edit_dialog.color[2]);
+        prim.color = new_color;
+        prim.name = edit_dialog.name.clone();
+        // Update material directly — Selected doesn't change during editing so
+        // highlight_selected_prim won't fire on its own.
+        if let Some(handle) = mat_handle {
+            if let Some(mat) = materials.get_mut(&handle.0) {
+                let lin = new_color.to_linear();
+                mat.base_color = Color::linear_rgba(
+                    (lin.red * 1.5).min(1.0),
+                    (lin.green * 1.5).min(1.0),
+                    (lin.blue * 1.5).min(1.0),
+                    lin.alpha,
+                );
+            }
+        }
+        break;
+    }
+}
+
+fn push_revert(game_state: &mut GameState, dialog: &EditDialogState) {
+    if !dialog.is_new {
+        use crate::resources::EditDialogState;
+        game_state.pending_prim_revert = Some(EditDialogState {
+            prim_id: dialog.prim_id,
+            name: dialog.original_name.clone(),
+            shape: dialog.original_shape.clone(),
+            position: dialog.original_position,
+            rotation: dialog.original_rotation,
+            scale: dialog.original_scale,
+            color: dialog.original_color,
+            ..Default::default()
+        });
     }
 }
 
@@ -375,6 +462,34 @@ pub fn send_prim_mutations(
                     commands.entity(entity).insert(Selected);
                     game_state.selected_prim_id = Some(prim_id);
                     tracing::info!(id = prim_id, "updated prim");
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(revert) = game_state.pending_prim_revert.take() {
+        if let Some(prim_id) = revert.prim_id {
+            for (entity, mut prim, mut transform) in prim_query.iter_mut() {
+                if prim.id == prim_id {
+                    prim.name = revert.name.clone();
+                    prim.shape = PrimShape::from_str(&revert.shape);
+                    prim.color = Color::srgb(revert.color[0], revert.color[1], revert.color[2]);
+                    *transform = Transform::from_xyz(
+                        revert.position[0],
+                        revert.position[1],
+                        revert.position[2],
+                    )
+                    .with_rotation(Quat::from_euler(
+                        EulerRot::XYZ,
+                        revert.rotation[0],
+                        revert.rotation[1],
+                        revert.rotation[2],
+                    ))
+                    .with_scale(Vec3::new(revert.scale[0], revert.scale[1], revert.scale[2]));
+                    // Re-insert Selected so highlight_selected_prim refreshes the material.
+                    commands.entity(entity).insert(Selected);
+                    game_state.selected_prim_id = Some(prim_id);
                     break;
                 }
             }

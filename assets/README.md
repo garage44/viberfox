@@ -1,6 +1,6 @@
 # Client runtime assets
 
-`vibers-rs` loads these from the **workspace root** `assets/` directory (see `AssetPlugin` in `crates/vibers-rs/src/main.rs`).
+`viberfox` loads these from the **workspace root** `assets/` directory (see `AssetPlugin` in `crates/viberfox/src/main.rs`).
 
 - **`models/animated/Fox.glb`** — Bevy’s sample fox mesh and animations (idle / run). Source: [bevyengine/bevy `assets/models/animated`](https://github.com/bevyengine/bevy/tree/main/assets/models/animated).
 

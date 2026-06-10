@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
         tick_hz = config.tick_hz,
         aoi = config.aoi_radius,
         tile_template = %config.osm_tile_url_template,
-        "vibers-sim"
+        "vibe_sim"
     );
 
     let conn = db::open_and_migrate(&config.database_path)?;

@@ -16,6 +16,7 @@ pub struct GameState {
     pub prims_loaded: bool,
     pub editing_prim_id: Option<i64>,
     pub pending_prim_save: Option<EditDialogState>,
+    pub pending_prim_revert: Option<EditDialogState>,
     pub prim_to_delete: Option<i64>,
 }
 
@@ -42,6 +43,13 @@ pub struct EditDialogState {
     pub scale: [f32; 3],
     pub color: [f32; 3],
     pub texture_id: Option<String>,
+    // Snapshot taken when the dialog opens; used to build a revert payload on Cancel.
+    pub original_name: String,
+    pub original_shape: String,
+    pub original_position: [f32; 3],
+    pub original_rotation: [f32; 3],
+    pub original_scale: [f32; 3],
+    pub original_color: [f32; 3],
 }
 
 #[derive(Resource)]
@@ -128,7 +136,7 @@ impl Default for OsmTileUrlTemplate {
     }
 }
 
-/// When set, client connects to `vibers-sim` instead of loading local SQLite world.
+/// When set, client connects to `vibe_sim` instead of loading local SQLite world.
 #[derive(Resource, Clone)]
 pub struct ConnectAddr(pub String);
 

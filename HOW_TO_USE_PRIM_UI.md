@@ -6,7 +6,7 @@ The prim authoring UI is now **fully functional** with egui. You can create, edi
 
 ### What You Need
 
-1. Run the client: `cargo run -p vibers-rs`
+1. Run the client: `cargo run -p viberfox`
 2. Start with a world that has some regions/tiles loaded
 3. Look at the **console output** - that's where you'll see the UI
 

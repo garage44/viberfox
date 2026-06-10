@@ -1,10 +1,10 @@
 [package]
-name = "vibers-sim"
+name = "vibe_sim"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "vibers-sim"
+name = "vibe_sim"
 path = "src/main.rs"
 
 [dependencies]

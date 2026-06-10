@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/vibe_core", "crates/vibers-sim", "crates/vibers-rs"]
-default-members = ["crates/vibers-rs"]
+members = ["crates/vibe_core", "crates/vibe_sim", "crates/viberfox"]
+default-members = ["crates/viberfox"]
 
 [workspace.package]
 version = "0.1.0"

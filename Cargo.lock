@@ -5140,7 +5140,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "vibers-rs"
+name = "vibe_sim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "figment",
+ "futures-util",
+ "glam",
+ "refinery",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "vibe_core",
+]
+
+[[package]]
+name = "viberfox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5162,28 +5184,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
- "uuid",
- "vibe_core",
-]
-
-[[package]]
-name = "vibers-sim"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "figment",
- "futures-util",
- "glam",
- "refinery",
- "rusqlite",
- "serde",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
  "uuid",
  "vibe_core",
 ]

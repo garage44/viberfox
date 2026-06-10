@@ -21,9 +21,9 @@ use systems::*;
 use systems::egui_manager::EguiPlugin;
 
 #[derive(Parser, Debug)]
-#[command(name = "vibers-rs")]
+#[command(name = "viberfox")]
 struct Cli {
-    /// Connect to a `vibers-sim` instance (TCP, postcard messages).
+    /// Connect to a `vibe_sim` instance (TCP, postcard messages).
     #[arg(long)]
     connect: Option<String>,
 }
@@ -34,7 +34,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off,vibers_rs=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off,viberfox=info")),
         )
         .init();
 
@@ -149,7 +149,10 @@ fn main() {
         (
             systems::ui::render_context_menu,
             systems::ui::render_edit_dialog,
-            systems::ui::send_prim_mutations,
+            systems::ui::apply_live_prim_edits
+                .after(systems::ui::render_edit_dialog),
+            systems::ui::send_prim_mutations
+                .after(systems::ui::render_edit_dialog),
         ),
     )
     // Phase 6: Transform gizmos

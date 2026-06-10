@@ -1,4 +1,5 @@
-use crate::components::{Prim, PrimShape, Region};
+use crate::components::{NeedsTextureRefresh, Prim, PrimShape, Region};
+use crate::resources::PrimTextureCache;
 use crate::systems::tile_loader::{RegionTile, TileKey};
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use bevy::prelude::*;
@@ -136,6 +137,7 @@ pub fn spawn_prims(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     prim_query: Query<(Entity, &Prim, &Transform), (Without<PrimMesh>, Without<RegionMesh>)>,
+    texture_cache: Res<PrimTextureCache>,
 ) {
     for (entity, prim, transform) in prim_query.iter() {
         // Unit meshes — Transform.scale on the entity handles the actual size in metres.
@@ -147,8 +149,15 @@ pub fn spawn_prims(
             PrimShape::Torus => meshes.add(Torus::default()),
         };
 
+        let base_color_texture = prim
+            .texture_id
+            .as_ref()
+            .and_then(|id| texture_cache.handles.get(id))
+            .cloned();
+
         let material_handle = materials.add(StandardMaterial {
             base_color: prim.color,
+            base_color_texture,
             ..default()
         });
 
@@ -158,5 +167,24 @@ pub fn spawn_prims(
             *transform,
             PrimMesh,
         ));
+    }
+}
+
+/// Swap the material texture for prims that were marked after a `TextureData` message arrived.
+pub fn refresh_prim_textures(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<(Entity, &Prim, &MeshMaterial3d<StandardMaterial>), With<NeedsTextureRefresh>>,
+    cache: Res<PrimTextureCache>,
+) {
+    for (entity, prim, mat_handle) in query.iter() {
+        if let Some(mat) = materials.get_mut(&mat_handle.0) {
+            mat.base_color_texture = prim
+                .texture_id
+                .as_ref()
+                .and_then(|id| cache.handles.get(id))
+                .cloned();
+        }
+        commands.entity(entity).remove::<NeedsTextureRefresh>();
     }
 }

@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc::UnboundedSender;
-use vibe_core::NetMessage;
+use vibe_core::{NetMessage, TextureEntry};
 
 // ---------------------------------------------------------------------------
 // AI assistant
@@ -79,6 +80,21 @@ pub struct MarqueeState {
     pub shift_add: bool,
 }
 
+/// Texture catalog with decoded egui handles for thumbnail display.
+#[derive(Resource, Default)]
+pub struct TextureLibrary {
+    pub entries: Vec<TextureEntry>,
+    /// Registered egui textures (same key as `entries[i].id`) for thumbnail rendering.
+    pub egui_handles: HashMap<String, egui::TextureHandle>,
+}
+
+/// Client-side cache of decoded texture images, keyed by texture id.
+#[derive(Resource, Default)]
+pub struct PrimTextureCache {
+    pub handles: HashMap<String, Handle<Image>>,
+    pub pending: HashSet<String>,
+}
+
 /// Context menu state for prim interaction (right-click menus)
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct ContextMenuState {
@@ -102,6 +118,7 @@ pub struct EditDialogState {
     pub scale: [f32; 3],
     pub color: [f32; 3],
     pub texture_id: Option<String>,
+    pub texture_picker_open: bool,
     // Snapshot taken when the dialog opens; used to build a revert payload on Cancel.
     pub original_name: String,
     pub original_shape: String,
@@ -109,6 +126,7 @@ pub struct EditDialogState {
     pub original_rotation: [f32; 3],
     pub original_scale: [f32; 3],
     pub original_color: [f32; 3],
+    pub original_texture_id: Option<String>,
 }
 
 #[derive(Resource)]

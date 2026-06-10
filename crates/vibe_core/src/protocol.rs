@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::ProtocolError;
 
 /// Bump when the app-frame layout or postcard schema changes incompatibly.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 const APP_HEADER_LEN: usize = 8;
 
@@ -26,6 +26,11 @@ pub enum MessageKind {
     UpdatePrim = 9,
     DeletePrim = 10,
     PrimUpsert = 11,
+    TextureCatalogRequest = 12,
+    TextureCatalog = 13,
+    TextureRequest = 14,
+    TextureData = 15,
+    TextureNotFound = 16,
 }
 
 impl MessageKind {
@@ -43,9 +48,20 @@ impl MessageKind {
             9 => Some(Self::UpdatePrim),
             10 => Some(Self::DeletePrim),
             11 => Some(Self::PrimUpsert),
+            12 => Some(Self::TextureCatalogRequest),
+            13 => Some(Self::TextureCatalog),
+            14 => Some(Self::TextureRequest),
+            15 => Some(Self::TextureData),
+            16 => Some(Self::TextureNotFound),
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TextureEntry {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,6 +169,28 @@ pub enum NetMessage {
     PrimUpsert {
         prim: PrimDto,
     },
+    /// Client requests the full texture catalog from the sim.
+    TextureCatalogRequest,
+    /// Sim responds with the list of available textures.
+    TextureCatalog {
+        textures: Vec<TextureEntry>,
+    },
+    /// Client requests raw PNG bytes for a specific texture.
+    TextureRequest {
+        request_id: u32,
+        texture_id: String,
+    },
+    /// Sim sends raw PNG bytes for the requested texture.
+    TextureData {
+        request_id: u32,
+        texture_id: String,
+        png_bytes: Vec<u8>,
+    },
+    /// Sim signals that the requested texture id does not exist.
+    TextureNotFound {
+        request_id: u32,
+        texture_id: String,
+    },
 }
 
 #[must_use]
@@ -169,6 +207,11 @@ pub fn message_kind(msg: &NetMessage) -> MessageKind {
         NetMessage::UpdatePrim { .. } => MessageKind::UpdatePrim,
         NetMessage::DeletePrim { .. } => MessageKind::DeletePrim,
         NetMessage::PrimUpsert { .. } => MessageKind::PrimUpsert,
+        NetMessage::TextureCatalogRequest => MessageKind::TextureCatalogRequest,
+        NetMessage::TextureCatalog { .. } => MessageKind::TextureCatalog,
+        NetMessage::TextureRequest { .. } => MessageKind::TextureRequest,
+        NetMessage::TextureData { .. } => MessageKind::TextureData,
+        NetMessage::TextureNotFound { .. } => MessageKind::TextureNotFound,
     }
 }
 
@@ -180,6 +223,9 @@ pub fn message_request_id(msg: &NetMessage) -> u32 {
         NetMessage::CreatePrim { request_id, .. } => *request_id,
         NetMessage::UpdatePrim { request_id, .. } => *request_id,
         NetMessage::DeletePrim { request_id, .. } => *request_id,
+        NetMessage::TextureRequest { request_id, .. } => *request_id,
+        NetMessage::TextureData { request_id, .. } => *request_id,
+        NetMessage::TextureNotFound { request_id, .. } => *request_id,
         _ => 0,
     }
 }

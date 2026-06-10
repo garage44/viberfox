@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod net;
 mod state;
+mod textures;
 
 use clap::Parser;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         tick_hz = config.tick_hz,
         aoi = config.aoi_radius,
         tile_template = %config.osm_tile_url_template,
+        texture_dir = %config.texture_dir,
         "vibe_sim"
     );
 

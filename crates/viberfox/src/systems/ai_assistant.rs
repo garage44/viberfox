@@ -60,6 +60,10 @@ fn tools_schema() -> serde_json::Value {
                             "g": {"type": "number", "description": "[0.0-1.0]"},
                             "b": {"type": "number", "description": "[0.0-1.0]"}
                         }
+                    },
+                    "texture_id": {
+                        "type": "string",
+                        "description": "Optional texture id (filename stem, e.g. 'brick'). Omit for solid color."
                     }
                 }
             }
@@ -97,6 +101,10 @@ fn tools_schema() -> serde_json::Value {
                             "g": {"type": "number"},
                             "b": {"type": "number"}
                         }
+                    },
+                    "texture_id": {
+                        "type": "string",
+                        "description": "Optional texture id (filename stem, e.g. 'brick'). Set to null to clear."
                     }
                 }
             }
@@ -462,6 +470,7 @@ fn run_tool(
             let pos = vec3_from(input, "position");
             let scale = vec3_from(input, "scale");
             let color = color_from(input);
+            let texture_id = input["texture_id"].as_str().map(|s| s.to_string());
             let region_id = region_query.iter().next().map(|r| r.id).unwrap_or(1);
 
             let new_id = db.as_ref().and_then(|db| {
@@ -475,6 +484,7 @@ fn run_tool(
                     [0.0, 0.0, 0.0],
                     [scale.x as f64, scale.y as f64, scale.z as f64],
                     [color[0] as f64, color[1] as f64, color[2] as f64],
+                    texture_id.as_deref(),
                 )
                 .ok()
             });
@@ -488,6 +498,7 @@ fn run_tool(
                             name: prim_name.clone(),
                             shape: PrimShape::from_str(&shape_str),
                             color: Color::srgb(color[0], color[1], color[2]),
+                            texture_id: texture_id.clone(),
                         },
                         Transform::from_xyz(pos.x, pos.y, pos.z)
                             .with_scale(Vec3::new(scale.x, scale.y, scale.z)),
@@ -537,6 +548,14 @@ fn run_tool(
             } else {
                 cur_color
             };
+            let new_texture_id = if input.get("texture_id").is_some() {
+                input["texture_id"].as_str().map(|s| s.to_string())
+            } else {
+                prim_query
+                    .iter()
+                    .find(|(_, p, _)| p.id == prim_id)
+                    .and_then(|(_, p, _)| p.texture_id.clone())
+            };
 
             // Persist to DB
             if let Some(db) = db {
@@ -550,22 +569,23 @@ fn run_tool(
                     [0.0, 0.0, 0.0],
                     [new_scale.x as f64, new_scale.y as f64, new_scale.z as f64],
                     [new_color[0] as f64, new_color[1] as f64, new_color[2] as f64],
+                    new_texture_id.as_deref(),
                 );
             }
 
             // Update the Bevy entity
-            if let Some((entity, _, _)) = prim_query.iter().find(|(_, p, _)| p.id == prim_id) {
+            if let Some((entity, existing_prim, _)) =
+                prim_query.iter().find(|(_, p, _)| p.id == prim_id)
+            {
+                let region_id = existing_prim.region_id;
                 commands.entity(entity).insert((
                     Prim {
                         id: prim_id,
-                        region_id: prim_query
-                            .iter()
-                            .find(|(_, p, _)| p.id == prim_id)
-                            .map(|(_, p, _)| p.region_id)
-                            .unwrap_or(1),
+                        region_id,
                         name: new_name.clone(),
                         shape: PrimShape::from_str(&new_shape),
                         color: Color::srgb(new_color[0], new_color[1], new_color[2]),
+                        texture_id: new_texture_id,
                     },
                     Transform::from_xyz(new_pos.x, new_pos.y, new_pos.z)
                         .with_scale(Vec3::new(new_scale.x, new_scale.y, new_scale.z)),

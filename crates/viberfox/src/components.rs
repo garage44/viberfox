@@ -22,7 +22,12 @@ pub struct Prim {
     pub name: String,
     pub shape: PrimShape,
     pub color: Color,
+    pub texture_id: Option<String>,
 }
+
+/// Marker: prim's material needs its `base_color_texture` swapped from the cache.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct NeedsTextureRefresh;
 
 #[derive(Component, Debug, Clone)]
 pub struct Avatar;

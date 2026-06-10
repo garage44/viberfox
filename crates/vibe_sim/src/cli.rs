@@ -18,4 +18,6 @@ pub struct SimCli {
         help = "OSM tile URL template with {z}/{x}/{y} (sent to clients at handshake)"
     )]
     pub osm_tile_url_template: Option<String>,
+    #[arg(long, help = "Directory serving texture PNG files to clients")]
+    pub texture_dir: Option<String>,
 }

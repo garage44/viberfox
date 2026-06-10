@@ -44,12 +44,18 @@ pub fn init_database(db_path: &str) -> Result<Connection> {
             color_r REAL NOT NULL DEFAULT 0.5,
             color_g REAL NOT NULL DEFAULT 0.5,
             color_b REAL NOT NULL DEFAULT 0.5,
+            texture_id TEXT DEFAULT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (region_id) REFERENCES regions(id) ON DELETE CASCADE
         )",
         [],
     )?;
+    // Add texture_id to existing databases that pre-date this column.
+    let _ = conn.execute(
+        "ALTER TABLE prims ADD COLUMN texture_id TEXT DEFAULT NULL",
+        [],
+    );
 
     // Create index on region_id
     conn.execute(
@@ -127,6 +133,7 @@ pub struct PrimRow {
     pub color_r: f32,
     pub color_g: f32,
     pub color_b: f32,
+    pub texture_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -17,6 +17,9 @@ pub struct SimConfig {
     /// Placeholders `{z}`, `{x}`, `{y}` for client tile fetch (ADR-004 / ADR-014).
     #[serde(default = "default_osm_tile_url_template")]
     pub osm_tile_url_template: String,
+    /// Directory from which *.png texture files are served to clients.
+    #[serde(default = "default_texture_dir")]
+    pub texture_dir: String,
 }
 
 fn default_listen() -> String {
@@ -39,6 +42,10 @@ fn default_osm_tile_url_template() -> String {
     "https://tile.openstreetmap.org/{z}/{x}/{y}.png".into()
 }
 
+fn default_texture_dir() -> String {
+    "data/textures".into()
+}
+
 impl Default for SimConfig {
     fn default() -> Self {
         Self {
@@ -47,6 +54,7 @@ impl Default for SimConfig {
             tick_hz: default_tick_hz(),
             aoi_radius: default_aoi(),
             osm_tile_url_template: default_osm_tile_url_template(),
+            texture_dir: default_texture_dir(),
         }
     }
 }
@@ -78,6 +86,9 @@ impl SimConfig {
         }
         if let Some(ref v) = cli.osm_tile_url_template {
             self.osm_tile_url_template.clone_from(v);
+        }
+        if let Some(ref v) = cli.texture_dir {
+            self.texture_dir.clone_from(v);
         }
     }
 }

@@ -4,7 +4,9 @@
 
 use super::egui_manager::EguiManager;
 use crate::components::{Prim, PrimShape, Region, Selected};
-use crate::resources::{ContextMenuState, Database, EditDialogState, GameState};
+use crate::resources::{
+    ContextMenuState, Database, EditDialogState, GameState, PrimTextureCache, TextureLibrary,
+};
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use egui::Window;
@@ -61,12 +63,15 @@ pub fn render_context_menu(
                             let scale_v = transform.scale;
                             edit_dialog.scale = [scale_v.x, scale_v.y, scale_v.z];
                             // Snapshot for Cancel revert.
+                            edit_dialog.texture_id = prim.texture_id.clone();
                             edit_dialog.original_name = prim.name.clone();
                             edit_dialog.original_color = color;
                             edit_dialog.original_shape = shape;
                             edit_dialog.original_position = edit_dialog.position;
                             edit_dialog.original_rotation = edit_dialog.rotation;
                             edit_dialog.original_scale = edit_dialog.scale;
+                            edit_dialog.original_texture_id = prim.texture_id.clone();
+                            edit_dialog.texture_picker_open = false;
                             edit_dialog.visible = true;
                             break;
                         }
@@ -87,6 +92,8 @@ pub fn render_context_menu(
                     edit_dialog.name = "Prim".to_string();
                     edit_dialog.color = [0.5, 0.5, 0.5]; // neutral gray
                     edit_dialog.shape = "box".to_string();
+                    edit_dialog.texture_id = None;
+                    edit_dialog.texture_picker_open = false;
                     let hit = context_menu.hit_point;
                     // Offset Y so the prim rests on the surface instead of being centred in it.
                     edit_dialog.position = [hit.x, hit.y + 0.5, hit.z];
@@ -113,6 +120,7 @@ pub fn render_edit_dialog(
     mut egui: ResMut<EguiManager>,
     mut edit_dialog: ResMut<EditDialogState>,
     mut game_state: ResMut<GameState>,
+    texture_lib: Res<TextureLibrary>,
 ) {
     if !edit_dialog.visible {
         return;
@@ -221,6 +229,24 @@ pub fn render_edit_dialog(
 
             ui.separator();
 
+            // Texture picker
+            ui.label("Texture:");
+            ui.horizontal(|ui| {
+                let tex_label = edit_dialog
+                    .texture_id
+                    .as_deref()
+                    .unwrap_or("None");
+                ui.label(tex_label);
+                if !texture_lib.entries.is_empty() && ui.button("Pick…").clicked() {
+                    edit_dialog.texture_picker_open = !edit_dialog.texture_picker_open;
+                }
+                if edit_dialog.texture_id.is_some() && ui.button("Clear").clicked() {
+                    edit_dialog.texture_id = None;
+                }
+            });
+
+            ui.separator();
+
             // Dialog buttons
             ui.horizontal(|ui| {
                 if ui.button("Save (S)").clicked() {
@@ -248,7 +274,88 @@ pub fn render_edit_dialog(
     if !dialog_open {
         push_revert(&mut game_state, &edit_dialog);
         edit_dialog.visible = false;
+        edit_dialog.texture_picker_open = false;
         game_state.editing_prim_id = None;
+    }
+
+    // Texture picker window
+    if edit_dialog.texture_picker_open && edit_dialog.visible {
+        let mut picker_open = edit_dialog.texture_picker_open;
+        let mut clicked_texture: Option<String> = None;
+        Window::new("Texture Library")
+            .open(&mut picker_open)
+            .default_width(380.0)
+            .show(egui.ctx_mut(), |ui| {
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    let cols = 4usize;
+                    egui::Grid::new("tex_grid")
+                        .num_columns(cols)
+                        .spacing([8.0, 8.0])
+                        .show(ui, |ui| {
+                            for (i, entry) in texture_lib.entries.iter().enumerate() {
+                                let selected =
+                                    edit_dialog.texture_id.as_deref() == Some(&entry.id);
+                                let cell_clicked = ui
+                                    .vertical(|ui| {
+                                        let clicked = if let Some(handle) =
+                                            texture_lib.egui_handles.get(&entry.id)
+                                        {
+                                            let sized = egui::load::SizedTexture::new(
+                                                handle.id(),
+                                                egui::vec2(72.0, 72.0),
+                                            );
+                                            let resp = ui.add(
+                                                egui::Image::new(sized)
+                                                    .sense(egui::Sense::click()),
+                                            );
+                                            if selected {
+                                                ui.painter().rect_stroke(
+                                                    resp.rect,
+                                                    2.0,
+                                                    egui::Stroke::new(
+                                                        2.5,
+                                                        ui.visuals().selection.bg_fill,
+                                                    ),
+                                                    egui::StrokeKind::Outside,
+                                                );
+                                            }
+                                            resp.clicked()
+                                        } else {
+                                            // Fallback text tile while egui handle is pending.
+                                            ui.add_sized(
+                                                [72.0, 72.0],
+                                                egui::SelectableLabel::new(selected, &entry.name),
+                                            )
+                                            .clicked()
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(&entry.name)
+                                                .small()
+                                                .line_height(Some(14.0)),
+                                        );
+                                        clicked
+                                    })
+                                    .inner;
+                                if cell_clicked {
+                                    clicked_texture = Some(entry.id.clone());
+                                }
+                                if (i + 1) % cols == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                            if !texture_lib.entries.is_empty()
+                                && texture_lib.entries.len() % cols != 0
+                            {
+                                ui.end_row();
+                            }
+                        });
+                });
+            });
+        if let Some(id) = clicked_texture {
+            edit_dialog.texture_id = Some(id);
+            picker_open = false;
+        }
+        edit_dialog.texture_picker_open = picker_open;
     }
 }
 
@@ -322,6 +429,7 @@ fn push_revert(game_state: &mut GameState, dialog: &EditDialogState) {
             rotation: dialog.original_rotation,
             scale: dialog.original_scale,
             color: dialog.original_color,
+            original_texture_id: dialog.original_texture_id.clone(),
             ..Default::default()
         });
     }
@@ -332,45 +440,48 @@ pub fn send_prim_mutations(
     mut commands: Commands,
     mut game_state: ResMut<GameState>,
     db: Option<Res<Database>>,
-    mut prim_query: Query<(Entity, &mut Prim, &mut Transform)>,
+    mut prim_query: Query<(Entity, &mut Prim, &mut Transform, Option<&MeshMaterial3d<StandardMaterial>>)>,
     region_query: Query<&Region>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    texture_cache: Res<PrimTextureCache>,
 ) {
+    use crate::systems::prim_ops;
+
     if let Some(dialog_state) = game_state.pending_prim_save.take() {
         if dialog_state.is_new {
             let region_id = region_query.iter().next().map(|r| r.id).unwrap_or(1);
+            let tex = dialog_state.texture_id.as_deref();
 
             let new_id: Option<i64> = db.as_ref().and_then(|db| {
                 let conn = db.conn.lock().unwrap();
-                conn.execute(
-                    "INSERT INTO prims \
-                     (region_id, name, shape, \
-                      position_x, position_y, position_z, \
-                      rotation_x, rotation_y, rotation_z, \
-                      scale_x, scale_y, scale_z, \
-                      color_r, color_g, color_b, \
-                      created_at, updated_at) \
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,\
-                             datetime('now'),datetime('now'))",
-                    rusqlite::params![
-                        region_id,
-                        dialog_state.name,
-                        dialog_state.shape,
+                prim_ops::db_create_prim(
+                    &conn,
+                    region_id,
+                    &dialog_state.name,
+                    &dialog_state.shape,
+                    [
                         dialog_state.position[0] as f64,
                         dialog_state.position[1] as f64,
                         dialog_state.position[2] as f64,
+                    ],
+                    [
                         dialog_state.rotation[0] as f64,
                         dialog_state.rotation[1] as f64,
                         dialog_state.rotation[2] as f64,
+                    ],
+                    [
                         dialog_state.scale[0] as f64,
                         dialog_state.scale[1] as f64,
                         dialog_state.scale[2] as f64,
+                    ],
+                    [
                         dialog_state.color[0] as f64,
                         dialog_state.color[1] as f64,
                         dialog_state.color[2] as f64,
                     ],
+                    tex,
                 )
-                .ok()?;
-                Some(conn.last_insert_rowid())
+                .ok()
             });
 
             if let Some(id) = new_id {
@@ -385,6 +496,7 @@ pub fn send_prim_mutations(
                             dialog_state.color[1],
                             dialog_state.color[2],
                         ),
+                        texture_id: dialog_state.texture_id.clone(),
                     },
                     Transform::from_xyz(
                         dialog_state.position[0],
@@ -408,36 +520,40 @@ pub fn send_prim_mutations(
                 tracing::info!(id, name = %dialog_state.name, "created prim");
             }
         } else if let Some(prim_id) = dialog_state.prim_id {
+            let tex = dialog_state.texture_id.as_deref();
             if let Some(ref db) = db {
                 let conn = db.conn.lock().unwrap();
-                let _ = conn.execute(
-                    "UPDATE prims SET name=?1, shape=?2, \
-                     position_x=?3, position_y=?4, position_z=?5, \
-                     rotation_x=?6, rotation_y=?7, rotation_z=?8, \
-                     scale_x=?9, scale_y=?10, scale_z=?11, \
-                     color_r=?12, color_g=?13, color_b=?14, \
-                     updated_at=datetime('now') WHERE id=?15",
-                    rusqlite::params![
-                        dialog_state.name,
-                        dialog_state.shape,
+                let _ = prim_ops::db_update_prim(
+                    &conn,
+                    prim_id,
+                    &dialog_state.name,
+                    &dialog_state.shape,
+                    [
                         dialog_state.position[0] as f64,
                         dialog_state.position[1] as f64,
                         dialog_state.position[2] as f64,
+                    ],
+                    [
                         dialog_state.rotation[0] as f64,
                         dialog_state.rotation[1] as f64,
                         dialog_state.rotation[2] as f64,
+                    ],
+                    [
                         dialog_state.scale[0] as f64,
                         dialog_state.scale[1] as f64,
                         dialog_state.scale[2] as f64,
+                    ],
+                    [
                         dialog_state.color[0] as f64,
                         dialog_state.color[1] as f64,
                         dialog_state.color[2] as f64,
-                        prim_id,
                     ],
+                    tex,
                 );
             }
-            for (entity, mut prim, mut transform) in prim_query.iter_mut() {
+            for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
                 if prim.id == prim_id {
+                    let texture_changed = prim.texture_id != dialog_state.texture_id;
                     prim.name = dialog_state.name.clone();
                     prim.shape = PrimShape::from_str(&dialog_state.shape);
                     prim.color = Color::srgb(
@@ -445,6 +561,7 @@ pub fn send_prim_mutations(
                         dialog_state.color[1],
                         dialog_state.color[2],
                     );
+                    prim.texture_id = dialog_state.texture_id.clone();
                     *transform = Transform::from_xyz(
                         dialog_state.position[0],
                         dialog_state.position[1],
@@ -461,6 +578,14 @@ pub fn send_prim_mutations(
                         dialog_state.scale[1],
                         dialog_state.scale[2],
                     ));
+                    if texture_changed {
+                        apply_texture_to_material(
+                            mat_handle_opt,
+                            &mut materials,
+                            &texture_cache,
+                            dialog_state.texture_id.as_deref(),
+                        );
+                    }
                     commands.entity(entity).insert(Selected);
                     game_state.selected_prim_id = Some(prim_id);
                     tracing::info!(id = prim_id, "updated prim");
@@ -472,11 +597,13 @@ pub fn send_prim_mutations(
 
     if let Some(revert) = game_state.pending_prim_revert.take() {
         if let Some(prim_id) = revert.prim_id {
-            for (entity, mut prim, mut transform) in prim_query.iter_mut() {
+            for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
                 if prim.id == prim_id {
+                    let texture_changed = prim.texture_id != revert.original_texture_id;
                     prim.name = revert.name.clone();
                     prim.shape = PrimShape::from_str(&revert.shape);
                     prim.color = Color::srgb(revert.color[0], revert.color[1], revert.color[2]);
+                    prim.texture_id = revert.original_texture_id.clone();
                     *transform = Transform::from_xyz(
                         revert.position[0],
                         revert.position[1],
@@ -489,7 +616,14 @@ pub fn send_prim_mutations(
                         revert.rotation[2],
                     ))
                     .with_scale(Vec3::new(revert.scale[0], revert.scale[1], revert.scale[2]));
-                    // Re-insert Selected so highlight_selected_prim refreshes the material.
+                    if texture_changed {
+                        apply_texture_to_material(
+                            mat_handle_opt,
+                            &mut materials,
+                            &texture_cache,
+                            revert.original_texture_id.as_deref(),
+                        );
+                    }
                     commands.entity(entity).insert(Selected);
                     game_state.selected_prim_id = Some(prim_id);
                     break;
@@ -503,7 +637,7 @@ pub fn send_prim_mutations(
             let conn = db.conn.lock().unwrap();
             let _ = conn.execute("DELETE FROM prims WHERE id=?1", rusqlite::params![prim_id]);
         }
-        for (entity, prim, _) in prim_query.iter() {
+        for (entity, prim, _, _) in prim_query.iter() {
             if prim.id == prim_id {
                 commands.entity(entity).despawn();
                 tracing::info!(id = prim_id, "deleted prim");
@@ -511,4 +645,23 @@ pub fn send_prim_mutations(
             }
         }
     }
+}
+
+/// Applies (or clears) a texture on a material handle in-place, same frame.
+fn apply_texture_to_material(
+    mat_handle_opt: Option<&MeshMaterial3d<StandardMaterial>>,
+    materials: &mut Assets<StandardMaterial>,
+    cache: &PrimTextureCache,
+    texture_id: Option<&str>,
+) {
+    let Some(mat_handle) = mat_handle_opt else {
+        return;
+    };
+    let Some(mat) = materials.get_mut(&mat_handle.0) else {
+        return;
+    };
+    mat.base_color_texture = texture_id
+        .and_then(|id| cache.handles.get(id))
+        .cloned()
+        .map(|h| h.into());
 }

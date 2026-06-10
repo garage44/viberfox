@@ -16,6 +16,7 @@ use components::Avatar;
 use resources::{
     AiAssistantState, AiConfig, AvatarState, CameraState, ConnectAddr, ContextMenuState, Database,
     EditDialogState, GameState, LocalAvatarSimId, MarqueeState, MouseState, OsmTileUrlTemplate,
+    PrimTextureCache, TextureLibrary,
 };
 use systems::egui_manager::EguiPlugin;
 use systems::*;
@@ -76,6 +77,8 @@ fn main() {
     .init_resource::<EditDialogState>()
     .init_resource::<systems::gizmo::GizmoState>()
     .init_resource::<MarqueeState>()
+    .init_resource::<TextureLibrary>()
+    .init_resource::<PrimTextureCache>()
     .insert_resource(AiConfig {
         api_key: std::env::var("ANTHROPIC_KEY").ok(),
         model: std::env::var("ANTHROPIC_MODEL")
@@ -91,6 +94,7 @@ fn main() {
         Startup,
         (
             database::init_database.run_if(no_connect_addr),
+            database::load_local_textures.run_if(no_connect_addr),
             network::spawn_network_thread.run_if(has_connect_addr),
             systems::free_camera::setup_camera,
             spawn_avatar_entity,
@@ -101,6 +105,8 @@ fn main() {
         Update,
         (
             network::apply_network_snapshot,
+            network::create_egui_texture_handles
+                .after(network::apply_network_snapshot),
             database::load_regions
                 .run_if(has_database)
                 .after(network::apply_network_snapshot),
@@ -112,6 +118,9 @@ fn main() {
                 .after(network::apply_network_snapshot),
             rendering::spawn_prims
                 .after(database::load_prims)
+                .after(network::apply_network_snapshot),
+            rendering::refresh_prim_textures
+                .after(rendering::spawn_prims)
                 .after(network::apply_network_snapshot),
         ),
     )

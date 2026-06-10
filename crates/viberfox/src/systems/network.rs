@@ -1,12 +1,14 @@
 //! TCP client for `--connect` (ADR-008, ADR-009).
 
-use crate::components::{Avatar, Prim, PrimShape, Region, RemoteAvatar, RemoteAvatarMotionHint};
+use crate::components::{Avatar, NeedsTextureRefresh, Prim, PrimShape, Region, RemoteAvatar, RemoteAvatarMotionHint};
 use crate::resources::{
     AvatarState, CameraState, ConnectAddr, GameState, LocalAvatarSimId, NetworkMailbox,
-    NetworkSyncState, OnlineSession, OsmTileUrlTemplate,
+    NetworkSyncState, OnlineSession, OsmTileUrlTemplate, PrimTextureCache, TextureLibrary,
 };
 use crate::systems::avatar::{fox_facing_yaw_from_camera, wish_dir_camera_relative};
 use bevy::prelude::*;
+use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashSet;
@@ -102,6 +104,10 @@ async fn client_loop(
         return Ok(());
     }
 
+    // Request the texture catalog immediately after handshake.
+    let cat_req = encode_app_frame(&NetMessage::TextureCatalogRequest)?;
+    framed.send(Bytes::from(cat_req)).await?;
+
     loop {
         tokio::select! {
             biased;
@@ -144,6 +150,10 @@ pub fn apply_network_snapshot(
     prim_entities: Query<(Entity, &Prim)>,
     mut avatar_tf: Query<&mut Transform, (With<Avatar>, Without<RemoteAvatar>)>,
     mut remote_avatars: Query<(Entity, &mut RemoteAvatar), Without<Avatar>>,
+    mut texture_lib: ResMut<TextureLibrary>,
+    mut texture_cache: ResMut<PrimTextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    online: Option<Res<OnlineSession>>,
 ) {
     let Some(mb) = mailbox else {
         return;
@@ -225,6 +235,43 @@ pub fn apply_network_snapshot(
                         break;
                     }
                 }
+            }
+            NetMessage::TextureCatalog { textures } => {
+                texture_lib.entries = textures.clone();
+                if let Some(sess) = online.as_ref() {
+                    for entry in &textures {
+                        if !texture_cache.handles.contains_key(&entry.id)
+                            && !texture_cache.pending.contains(&entry.id)
+                        {
+                            texture_cache.pending.insert(entry.id.clone());
+                            let _ = sess.intent_tx.send(NetMessage::TextureRequest {
+                                request_id: 0,
+                                texture_id: entry.id.clone(),
+                            });
+                        }
+                    }
+                }
+                tracing::info!(count = textures.len(), "texture catalog received");
+            }
+            NetMessage::TextureData { texture_id, png_bytes, .. } => {
+                texture_cache.pending.remove(&texture_id);
+                match decode_png_to_image(&png_bytes) {
+                    Some(img) => {
+                        let handle = images.add(img);
+                        texture_cache.handles.insert(texture_id.clone(), handle);
+                        for (entity, prim) in prim_entities.iter() {
+                            if prim.texture_id.as_deref() == Some(&texture_id) {
+                                commands.entity(entity).insert(NeedsTextureRefresh);
+                            }
+                        }
+                        tracing::debug!(id = %texture_id, "texture loaded");
+                    }
+                    None => tracing::warn!(id = %texture_id, "failed to decode texture PNG"),
+                }
+            }
+            NetMessage::TextureNotFound { texture_id, .. } => {
+                texture_cache.pending.remove(&texture_id);
+                tracing::warn!(id = %texture_id, "texture not found on server");
             }
             _ => {}
         }
@@ -347,6 +394,7 @@ fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
             name: p.name,
             shape: PrimShape::from_str(&p.shape),
             color: Color::srgb(p.color[0], p.color[1], p.color[2]),
+            texture_id: p.texture_id,
         },
         Transform::from_translation(p.position)
             .with_rotation(Quat::from_euler(
@@ -357,6 +405,60 @@ fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
             ))
             .with_scale(p.scale),
     )
+}
+
+fn decode_png_to_image(png_bytes: &[u8]) -> Option<Image> {
+    let dynamic = image::load_from_memory(png_bytes).ok()?;
+    let rgba = dynamic.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    // MAIN_WORLD keeps the CPU bytes available for `create_egui_texture_handles`.
+    Some(Image::new(
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        rgba.into_raw(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    ))
+}
+
+/// Creates egui thumbnail handles for any texture in the library that doesn't have one yet.
+/// Runs every Update frame; no-ops once all entries are covered.
+pub fn create_egui_texture_handles(
+    mut texture_lib: ResMut<TextureLibrary>,
+    texture_cache: Res<PrimTextureCache>,
+    images: Res<Assets<Image>>,
+    egui_manager: Res<super::egui_manager::EguiManager>,
+) {
+    let entries: Vec<String> = texture_lib
+        .entries
+        .iter()
+        .filter(|e| !texture_lib.egui_handles.contains_key(&e.id))
+        .map(|e| e.id.clone())
+        .collect();
+
+    for id in entries {
+        let Some(img_handle) = texture_cache.handles.get(&id) else {
+            continue;
+        };
+        let Some(img) = images.get(img_handle) else {
+            continue;
+        };
+        let Some(data) = &img.data else {
+            continue;
+        };
+        let w = img.width();
+        let h = img.height();
+        if data.len() != (w * h * 4) as usize {
+            continue;
+        }
+        let pixels: Vec<egui::Color32> = data
+            .chunks_exact(4)
+            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+            .collect();
+        let color_image = egui::ColorImage { size: [w as usize, h as usize], pixels };
+        let handle = egui_manager.ctx.load_texture(&id, color_image, egui::TextureOptions::LINEAR);
+        texture_lib.egui_handles.insert(id, handle);
+    }
 }
 
 pub fn send_network_intent(

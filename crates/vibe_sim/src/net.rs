@@ -1,5 +1,6 @@
 use crate::config::SimConfig;
 use crate::state::SimWorld;
+use crate::textures;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{Arc, Mutex};
@@ -194,11 +195,31 @@ pub async fn handle_connection(
                                     }
                                 }
                             }
+                            NetMessage::TextureCatalogRequest => {
+                                let entries = textures::list_textures(&config.texture_dir);
+                                let msg = encode_app_frame(&NetMessage::TextureCatalog { textures: entries })?;
+                                framed.send(Bytes::from(msg)).await?;
+                            }
+                            NetMessage::TextureRequest { request_id, texture_id } => {
+                                match textures::load_texture(&config.texture_dir, &texture_id) {
+                                    Some(png_bytes) => {
+                                        let msg = encode_app_frame(&NetMessage::TextureData { request_id, texture_id, png_bytes })?;
+                                        framed.send(Bytes::from(msg)).await?;
+                                    }
+                                    None => {
+                                        let msg = encode_app_frame(&NetMessage::TextureNotFound { request_id, texture_id })?;
+                                        framed.send(Bytes::from(msg)).await?;
+                                    }
+                                }
+                            }
                             NetMessage::PrimRemoved { .. }
                             | NetMessage::WorldSnapshot { .. }
                             | NetMessage::ServerHelloAck { .. }
                             | NetMessage::ServerError { .. }
-                            | NetMessage::PrimUpsert { .. } => {
+                            | NetMessage::PrimUpsert { .. }
+                            | NetMessage::TextureCatalog { .. }
+                            | NetMessage::TextureData { .. }
+                            | NetMessage::TextureNotFound { .. } => {
                                 tracing::debug!("ignored message from client");
                             }
                         }

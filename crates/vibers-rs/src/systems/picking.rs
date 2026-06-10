@@ -20,7 +20,6 @@ pub fn prim_picking(
     selected_query: Query<Entity, With<Selected>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
 ) {
-    // Get the primary window and camera
     let window = match windows.iter().next() {
         Some(w) => w,
         None => return,
@@ -31,40 +30,32 @@ pub fn prim_picking(
         None => return,
     };
 
-    let (_camera, camera_global_transform) = match cameras.iter().next() {
+    let (camera, camera_global_transform) = match cameras.iter().next() {
         Some(cam) => cam,
         None => return,
     };
 
-    // Simplified ray calculation: extend from camera through cursor position
-    let viewport_size = Vec2::new(window.width(), window.height());
-    let ndc = Vec2::new(
-        (cursor_position.x / viewport_size.x) * 2.0 - 1.0,
-        1.0 - (cursor_position.y / viewport_size.y) * 2.0,
-    );
+    // Proper perspective ray through the cursor position.
+    let Ok(ray) = camera.viewport_to_world(camera_global_transform, cursor_position) else {
+        return;
+    };
 
-    // Convert NDC to world space - use a simplified approach
-    // Assume orthographic for simplicity, or use the forward direction with some scaling
-    let ray_origin = camera_global_transform.translation();
-    let camera_forward = camera_global_transform.forward();
-    let camera_right = camera_global_transform.right();
-    let camera_up = camera_global_transform.up();
+    let ray_origin = ray.origin;
+    let ray_dir = ray.direction.as_vec3();
 
-    // Adjust ray direction based on cursor position in viewport
-    // Convert Dir3 to Vec3 and combine
-    let ray_direction = (camera_forward.as_vec3() * 1.0
-        + camera_right.as_vec3() * ndc.x * 0.1
-        + camera_up.as_vec3() * ndc.y * 0.1)
-        .normalize();
-
-    // Simple AABB raycast against prims
+    // Sphere-based prim hit test. For the currently selected prim we extend the
+    // radius to cover the gizmo arm so clicking on an axis handle does not deselect.
     let mut hit_prim: Option<(Entity, &Prim, f32)> = None;
     for (entity, prim, prim_transform) in prim_query.iter() {
-        // Simple sphere test (approximate bounding sphere from scale)
-        let radius = prim_transform.scale().length() / 2.0;
+        let max_scale = prim_transform.scale().max_element();
+        let radius = if game_state.selected_prim_id == Some(prim.id) {
+            (max_scale * 0.8).max(1.2) // cover gizmo arm
+        } else {
+            max_scale * 0.5
+        };
         let sphere_center = prim_transform.translation();
 
-        if raycast_sphere(ray_origin, ray_direction, sphere_center, radius) {
+        if raycast_sphere(ray_origin, ray_dir, sphere_center, radius) {
             let distance = (sphere_center - ray_origin).length();
             match hit_prim {
                 None => hit_prim = Some((entity, prim, distance)),
@@ -76,9 +67,8 @@ pub fn prim_picking(
         }
     }
 
-    // Check for left-click (select prim)
+    // Left-click: select prim.
     if mouse_buttons.just_pressed(MouseButton::Left) {
-        // Deselect previous prim
         for entity in selected_query.iter() {
             commands.entity(entity).remove::<Selected>();
         }
@@ -93,7 +83,7 @@ pub fn prim_picking(
         }
     }
 
-    // Check for right-click (show context menu)
+    // Right-click: open context menu.
     if mouse_buttons.just_pressed(MouseButton::Right) {
         context_menu.visible = true;
         context_menu.screen_pos = cursor_position;
@@ -101,20 +91,23 @@ pub fn prim_picking(
         if let Some((_, prim, _)) = hit_prim {
             context_menu.hit_prim_id = Some(prim.id);
             context_menu.hit_region_id = Some(prim.region_id);
-            context_menu.hit_point = ray_origin + ray_direction * 10.0;
+            context_menu.hit_point = ray_plane_y(ray_origin, ray_dir, 0.0)
+                .unwrap_or_else(|| ray_origin + ray_dir * 10.0);
             tracing::debug!(prim_id = prim.id, "context menu for prim");
         } else {
-            // Check if clicked on a region for "create prim" option
             context_menu.hit_prim_id = None;
 
-            // Raycast against regions to get hit point
-            for (_, region, _) in region_query.iter() {
+            let mut found_region = false;
+            for (_, region, region_transform) in region_query.iter() {
+                let region_y = region_transform.translation().y;
                 context_menu.hit_region_id = Some(region.id);
-                context_menu.hit_point = ray_origin + ray_direction * 10.0; // Approximate hit point
-                break; // Just use the first region for simplicity
+                context_menu.hit_point = ray_plane_y(ray_origin, ray_dir, region_y)
+                    .unwrap_or_else(|| ray_origin + ray_dir * 20.0);
+                found_region = true;
+                break;
             }
 
-            if context_menu.hit_region_id.is_none() {
+            if !found_region {
                 context_menu.visible = false;
             }
             tracing::debug!("context menu for region");
@@ -122,7 +115,20 @@ pub fn prim_picking(
     }
 }
 
-/// Simple ray-sphere intersection test
+/// Intersect ray with horizontal plane at the given y level.
+/// Returns None if the ray is nearly parallel to the plane or points away from it.
+fn ray_plane_y(origin: Vec3, dir: Vec3, y: f32) -> Option<Vec3> {
+    if dir.y.abs() < 1e-6 {
+        return None;
+    }
+    let t = (y - origin.y) / dir.y;
+    if t <= 0.0 {
+        return None;
+    }
+    Some(origin + dir * t)
+}
+
+/// Simple ray-sphere intersection test.
 fn raycast_sphere(ray_origin: Vec3, ray_dir: Vec3, sphere_center: Vec3, radius: f32) -> bool {
     let oc = ray_origin - sphere_center;
     let a = ray_dir.dot(ray_dir);
@@ -145,17 +151,15 @@ pub fn highlight_selected_prim(
     >,
 ) {
     for (prim, material_handle) in selected_query.iter() {
-        // Brighten the material to show selection
         if let Some(material) = materials.get_mut(&material_handle.0) {
             let brightened = prim.color.to_linear();
-            let brightened_srgb = Color::linear_rgba(
+            material.base_color = Color::linear_rgba(
                 (brightened.red * 1.5).min(1.0),
                 (brightened.green * 1.5).min(1.0),
                 (brightened.blue * 1.5).min(1.0),
                 brightened.alpha,
             );
-            material.base_color = brightened_srgb;
-            material.emissive = LinearRgba::new(0.2, 0.3, 0.5, 1.0); // Slight emissive glow
+            material.emissive = LinearRgba::new(0.2, 0.3, 0.5, 1.0);
         }
     }
 }

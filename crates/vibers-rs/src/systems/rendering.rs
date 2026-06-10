@@ -138,15 +138,12 @@ pub fn spawn_prims(
     prim_query: Query<(Entity, &Prim, &Transform), (Without<PrimMesh>, Without<RegionMesh>)>,
 ) {
     for (entity, prim, transform) in prim_query.iter() {
+        // Unit meshes — Transform.scale on the entity handles the actual size in metres.
         let mesh_handle = match prim.shape {
-            PrimShape::Box => meshes.add(Cuboid::new(
-                transform.scale.x / 2.0,
-                transform.scale.y / 2.0,
-                transform.scale.z / 2.0,
-            )),
-            PrimShape::Sphere => meshes.add(Sphere::default()),
-            PrimShape::Cylinder => meshes.add(Cylinder::default()),
-            PrimShape::Cone => meshes.add(Cylinder::default()), // Use cylinder as cone substitute
+            PrimShape::Box => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            PrimShape::Sphere => meshes.add(Sphere::new(0.5)),
+            PrimShape::Cylinder => meshes.add(Cylinder::new(0.5, 1.0)),
+            PrimShape::Cone => meshes.add(Cylinder::new(0.0, 1.0)),
             PrimShape::Torus => meshes.add(Torus::default()),
         };
 

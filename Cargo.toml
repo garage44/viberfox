@@ -16,6 +16,7 @@ bevy = { version = "0.16", default-features = false, features = [
     "async_executor",
     "bevy_asset",
     "bevy_core_pipeline",
+    "bevy_gizmos",
     "bevy_gltf",
     "bevy_log",
     "bevy_pbr",

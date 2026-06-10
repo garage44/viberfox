@@ -3,8 +3,8 @@
 //! Renders context menus and edit dialogs using egui.
 
 use super::egui_manager::EguiManager;
-use crate::components::Prim;
-use crate::resources::{ContextMenuState, EditDialogState, GameState};
+use crate::components::{Prim, PrimShape, Region, Selected};
+use crate::resources::{ContextMenuState, Database, EditDialogState, GameState};
 use bevy::prelude::*;
 use egui::Window;
 
@@ -88,7 +88,8 @@ pub fn render_context_menu(
                     edit_dialog.color = [0.5, 0.5, 0.5]; // neutral gray
                     edit_dialog.shape = "box".to_string();
                     let hit = context_menu.hit_point;
-                    edit_dialog.position = [hit.x, hit.y, hit.z];
+                    // Offset Y so the prim rests on the surface instead of being centred in it.
+                    edit_dialog.position = [hit.x, hit.y + 0.5, hit.z];
                     edit_dialog.rotation = [0.0, 0.0, 0.0];
                     edit_dialog.scale = [1.0, 1.0, 1.0];
                     edit_dialog.visible = true;
@@ -286,30 +287,163 @@ pub fn render_ui_overlay(context_menu: Res<ContextMenuState>, edit_dialog: Res<E
     }
 }
 
-/// Send prim messages to the network (handles Save from edit dialog)
-pub fn send_prim_mutations(mut game_state: ResMut<GameState>, _prim_query: Query<&Prim>) {
-    // Handle prim save
+/// Persist prim changes to the local database and update the Bevy world.
+pub fn send_prim_mutations(
+    mut commands: Commands,
+    mut game_state: ResMut<GameState>,
+    db: Option<Res<Database>>,
+    mut prim_query: Query<(Entity, &mut Prim, &mut Transform)>,
+    region_query: Query<&Region>,
+) {
     if let Some(dialog_state) = game_state.pending_prim_save.take() {
         if dialog_state.is_new {
-            println!("\x1b[92m[SAVING NEW PRIM]\x1b[0m");
-            println!("  Name: {}", dialog_state.name);
-            println!("  Shape: {}", dialog_state.shape);
-            println!(
-                "  Position: [{:.1}, {:.1}, {:.1}]",
-                dialog_state.position[0], dialog_state.position[1], dialog_state.position[2]
-            );
-            // TODO: Send CreatePrim message to server
+            let region_id = region_query.iter().next().map(|r| r.id).unwrap_or(1);
+
+            let new_id: Option<i64> = db.as_ref().and_then(|db| {
+                let conn = db.conn.lock().unwrap();
+                conn.execute(
+                    "INSERT INTO prims \
+                     (region_id, name, shape, \
+                      position_x, position_y, position_z, \
+                      rotation_x, rotation_y, rotation_z, \
+                      scale_x, scale_y, scale_z, \
+                      color_r, color_g, color_b, \
+                      created_at, updated_at) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,\
+                             datetime('now'),datetime('now'))",
+                    rusqlite::params![
+                        region_id,
+                        dialog_state.name,
+                        dialog_state.shape,
+                        dialog_state.position[0] as f64,
+                        dialog_state.position[1] as f64,
+                        dialog_state.position[2] as f64,
+                        dialog_state.rotation[0] as f64,
+                        dialog_state.rotation[1] as f64,
+                        dialog_state.rotation[2] as f64,
+                        dialog_state.scale[0] as f64,
+                        dialog_state.scale[1] as f64,
+                        dialog_state.scale[2] as f64,
+                        dialog_state.color[0] as f64,
+                        dialog_state.color[1] as f64,
+                        dialog_state.color[2] as f64,
+                    ],
+                )
+                .ok()?;
+                Some(conn.last_insert_rowid())
+            });
+
+            if let Some(id) = new_id {
+                commands.spawn((
+                    Prim {
+                        id,
+                        region_id,
+                        name: dialog_state.name.clone(),
+                        shape: PrimShape::from_str(&dialog_state.shape),
+                        color: Color::srgb(
+                            dialog_state.color[0],
+                            dialog_state.color[1],
+                            dialog_state.color[2],
+                        ),
+                    },
+                    Transform::from_xyz(
+                        dialog_state.position[0],
+                        dialog_state.position[1],
+                        dialog_state.position[2],
+                    )
+                    .with_rotation(Quat::from_euler(
+                        EulerRot::XYZ,
+                        dialog_state.rotation[0],
+                        dialog_state.rotation[1],
+                        dialog_state.rotation[2],
+                    ))
+                    .with_scale(Vec3::new(
+                        dialog_state.scale[0],
+                        dialog_state.scale[1],
+                        dialog_state.scale[2],
+                    )),
+                    Selected,
+                ));
+                game_state.selected_prim_id = Some(id);
+                tracing::info!(id, name = %dialog_state.name, "created prim");
+            }
         } else if let Some(prim_id) = dialog_state.prim_id {
-            println!("\x1b[92m[UPDATING PRIM {}]\x1b[0m", prim_id);
-            println!("  Name: {}", dialog_state.name);
-            // TODO: Send UpdatePrim message to server
+            if let Some(ref db) = db {
+                let conn = db.conn.lock().unwrap();
+                let _ = conn.execute(
+                    "UPDATE prims SET name=?1, shape=?2, \
+                     position_x=?3, position_y=?4, position_z=?5, \
+                     rotation_x=?6, rotation_y=?7, rotation_z=?8, \
+                     scale_x=?9, scale_y=?10, scale_z=?11, \
+                     color_r=?12, color_g=?13, color_b=?14, \
+                     updated_at=datetime('now') WHERE id=?15",
+                    rusqlite::params![
+                        dialog_state.name,
+                        dialog_state.shape,
+                        dialog_state.position[0] as f64,
+                        dialog_state.position[1] as f64,
+                        dialog_state.position[2] as f64,
+                        dialog_state.rotation[0] as f64,
+                        dialog_state.rotation[1] as f64,
+                        dialog_state.rotation[2] as f64,
+                        dialog_state.scale[0] as f64,
+                        dialog_state.scale[1] as f64,
+                        dialog_state.scale[2] as f64,
+                        dialog_state.color[0] as f64,
+                        dialog_state.color[1] as f64,
+                        dialog_state.color[2] as f64,
+                        prim_id,
+                    ],
+                );
+            }
+            for (entity, mut prim, mut transform) in prim_query.iter_mut() {
+                if prim.id == prim_id {
+                    prim.name = dialog_state.name.clone();
+                    prim.shape = PrimShape::from_str(&dialog_state.shape);
+                    prim.color = Color::srgb(
+                        dialog_state.color[0],
+                        dialog_state.color[1],
+                        dialog_state.color[2],
+                    );
+                    *transform = Transform::from_xyz(
+                        dialog_state.position[0],
+                        dialog_state.position[1],
+                        dialog_state.position[2],
+                    )
+                    .with_rotation(Quat::from_euler(
+                        EulerRot::XYZ,
+                        dialog_state.rotation[0],
+                        dialog_state.rotation[1],
+                        dialog_state.rotation[2],
+                    ))
+                    .with_scale(Vec3::new(
+                        dialog_state.scale[0],
+                        dialog_state.scale[1],
+                        dialog_state.scale[2],
+                    ));
+                    commands.entity(entity).insert(Selected);
+                    game_state.selected_prim_id = Some(prim_id);
+                    tracing::info!(id = prim_id, "updated prim");
+                    break;
+                }
+            }
         }
     }
 
-    // Handle prim delete
     if let Some(prim_id) = game_state.prim_to_delete.take() {
-        println!("\x1b[91m[DELETING PRIM {}]\x1b[0m", prim_id);
-        tracing::info!(prim_id, "deleting prim");
-        // TODO: Send DeletePrim message to server
+        if let Some(ref db) = db {
+            let conn = db.conn.lock().unwrap();
+            let _ = conn.execute(
+                "DELETE FROM prims WHERE id=?1",
+                rusqlite::params![prim_id],
+            );
+        }
+        for (entity, prim, _) in prim_query.iter() {
+            if prim.id == prim_id {
+                commands.entity(entity).despawn();
+                tracing::info!(id = prim_id, "deleted prim");
+                break;
+            }
+        }
     }
 }

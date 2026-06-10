@@ -158,6 +158,7 @@ fn main() {
         Update,
         (
             systems::gizmo::handle_gizmo_mode_input,
+            systems::gizmo::render_gizmo_toolbar,
             systems::gizmo::render_gizmo_visuals,
             systems::gizmo::handle_gizmo_interaction,
         ),

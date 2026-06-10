@@ -8,6 +8,7 @@ use crate::components::{Prim, Selected};
 use crate::resources::{EditDialogState, OnlineSession};
 use crate::systems::egui_manager::EguiManager;
 use bevy::prelude::*;
+use std::f32::consts::TAU;
 use vibe_core::NetMessage;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -169,8 +170,28 @@ fn axis_vec(axis: GizmoAxis) -> Vec3 {
 
 const HIT_THRESHOLD_PX: f32 = 16.0;
 
-/// Returns the axis whose screen-projected tip is within `HIT_THRESHOLD_PX` of the cursor.
+/// Returns the axis handle closest to the cursor, dispatching to tip-test (translate/scale)
+/// or ring-test (rotate).
 fn find_hit_axis(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    prim_pos: Vec3,
+    arm: f32,
+    cursor: Vec2,
+    mode: GizmoMode,
+) -> Option<GizmoAxis> {
+    match mode {
+        GizmoMode::Translate | GizmoMode::Scale => {
+            find_hit_axis_tip(camera, cam_gt, prim_pos, arm, cursor)
+        }
+        GizmoMode::Rotate => {
+            find_hit_axis_ring(camera, cam_gt, prim_pos, arm, cursor)
+        }
+    }
+}
+
+/// Hit-test arrow / scale-stub tips (single point per axis).
+fn find_hit_axis_tip(
     camera: &Camera,
     cam_gt: &GlobalTransform,
     prim_pos: Vec3,
@@ -193,12 +214,48 @@ fn find_hit_axis(
     best
 }
 
+/// Hit-test rotation rings by sampling 32 points along each ring circumference.
+fn find_hit_axis_ring(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    prim_pos: Vec3,
+    arm: f32,
+    cursor: Vec2,
+) -> Option<GizmoAxis> {
+    // (axis, tangent_u, tangent_v) — ring lies in the plane spanned by u and v.
+    let rings: [(GizmoAxis, Vec3, Vec3); 3] = [
+        (GizmoAxis::X, Vec3::Y, Vec3::Z), // YZ plane  → rotate around X
+        (GizmoAxis::Y, Vec3::X, Vec3::Z), // XZ plane  → rotate around Y
+        (GizmoAxis::Z, Vec3::X, Vec3::Y), // XY plane  → rotate around Z
+    ];
+
+    const N: usize = 32;
+    let mut best: Option<GizmoAxis> = None;
+    let mut best_dist = HIT_THRESHOLD_PX;
+
+    for (axis, u, v) in rings {
+        for i in 0..N {
+            let angle = i as f32 * TAU / N as f32;
+            let pt = prim_pos + (u * angle.cos() + v * angle.sin()) * arm;
+            if let Ok(screen) = camera.world_to_viewport(cam_gt, pt) {
+                let dist = (screen - cursor).length();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = Some(axis);
+                }
+            }
+        }
+    }
+    best
+}
+
 // ─── Drag interaction ─────────────────────────────────────────────────────────
 
 pub fn handle_gizmo_interaction(
     mut selected_query: Query<(&mut Transform, &Prim), With<Selected>>,
     mut gizmo_state: ResMut<GizmoState>,
     mut edit_dialog: ResMut<EditDialogState>,
+    egui_manager: Res<EguiManager>,
     windows: Query<&Window>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -222,15 +279,15 @@ pub fn handle_gizmo_interaction(
         None => return,
     };
 
-    // ── On press: hit-test axis handles ──────────────────────────────────────
-    if mouse_buttons.just_pressed(MouseButton::Left) {
+    // ── On press: hit-test axis handles (skip if egui is consuming the click) ─
+    if mouse_buttons.just_pressed(MouseButton::Left) && !egui_manager.ctx.wants_pointer_input() {
         // Read prim position without a mutable borrow.
         let (prim_pos, arm, start_tr) = {
             let Ok((tr, _)) = selected_query.single() else { return; };
             (tr.translation, arm_length(tr.scale.max_element()), *tr)
         };
 
-        if let Some(axis) = find_hit_axis(camera, cam_gt, prim_pos, arm, cursor) {
+        if let Some(axis) = find_hit_axis(camera, cam_gt, prim_pos, arm, cursor, gizmo_state.mode) {
             gizmo_state.active_axis = Some(axis);
             gizmo_state.drag_start_screen = cursor;
             gizmo_state.drag_start_transform = Some(start_tr);

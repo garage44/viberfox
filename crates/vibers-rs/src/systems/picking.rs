@@ -4,7 +4,8 @@
 //! On right-click: show context menu with options to create/edit/delete.
 
 use crate::components::{Prim, Selected};
-use crate::resources::{ContextMenuState, GameState};
+use crate::resources::{CameraMode, CameraState, ContextMenuState, GameState};
+use crate::systems::egui_manager::EguiManager;
 use crate::systems::rendering::PrimMesh;
 use bevy::prelude::*;
 
@@ -13,6 +14,8 @@ pub fn prim_picking(
     mut commands: Commands,
     mut game_state: ResMut<GameState>,
     mut context_menu: ResMut<ContextMenuState>,
+    egui_manager: Res<EguiManager>,
+    camera_state: Res<CameraState>,
     windows: Query<&Window>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     prim_query: Query<(Entity, &Prim, &GlobalTransform), With<PrimMesh>>,
@@ -20,6 +23,19 @@ pub fn prim_picking(
     selected_query: Query<Entity, With<Selected>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
 ) {
+    // Don't process world clicks when egui has the pointer (toolbar buttons, dialogs, etc.).
+    if egui_manager.ctx.wants_pointer_input() {
+        return;
+    }
+
+    // Any click outside egui closes the context menu.
+    if context_menu.visible
+        && (mouse_buttons.just_pressed(MouseButton::Left)
+            || mouse_buttons.just_pressed(MouseButton::Right))
+    {
+        context_menu.visible = false;
+    }
+
     let window = match windows.iter().next() {
         Some(w) => w,
         None => return,
@@ -67,8 +83,10 @@ pub fn prim_picking(
         }
     }
 
-    // Left-click: select prim.
-    if mouse_buttons.just_pressed(MouseButton::Left) {
+    // Left-click: select prim (skipped in Free mode — left-drag is camera look there).
+    if mouse_buttons.just_pressed(MouseButton::Left)
+        && camera_state.mode != CameraMode::Free
+    {
         for entity in selected_query.iter() {
             commands.entity(entity).remove::<Selected>();
         }

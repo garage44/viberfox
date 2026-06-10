@@ -10,30 +10,16 @@ use egui::Window;
 
 /// Render context menu when a prim is right-clicked
 pub fn render_context_menu(
+    mut commands: Commands,
     mut egui: ResMut<EguiManager>,
     mut context_menu: ResMut<ContextMenuState>,
     mut edit_dialog: ResMut<EditDialogState>,
     mut game_state: ResMut<GameState>,
-    prim_query: Query<(&Prim, &Transform)>,
+    prim_query: Query<(Entity, &Prim, &Transform)>,
+    selected_query: Query<Entity, With<Selected>>,
 ) {
     if !context_menu.visible {
         return;
-    }
-
-    // Debug: Context menu is visible
-    if let Some(prim_id) = context_menu.hit_prim_id {
-        tracing::info!(prim_id, "context menu: edit/delete prim");
-    } else {
-        tracing::info!("context menu: create prim");
-    }
-
-    println!("\n\x1b[92m=== CONTEXT MENU OPEN ===");
-    if let Some(prim_id) = context_menu.hit_prim_id {
-        println!("Prim ID: {}", prim_id);
-        println!("Press [E] to Edit, [D] to Delete, or click buttons\x1b[0m");
-    } else {
-        println!("Empty space");
-        println!("Press [C] to Create Prim, or click button\x1b[0m");
     }
 
     let ctx = egui.ctx_mut();
@@ -49,9 +35,13 @@ pub fn render_context_menu(
             if let Some(prim_id) = context_menu.hit_prim_id {
                 // Clicked on an existing prim
                 if ui.button("Edit Prim (E)").clicked() {
-                    // Load the prim properties into the edit dialog
-                    for (prim, transform) in prim_query.iter() {
+                    for entity in selected_query.iter() {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                    for (entity, prim, transform) in prim_query.iter() {
                         if prim.id == prim_id {
+                            commands.entity(entity).insert(Selected);
+                            game_state.selected_prim_id = Some(prim_id);
                             game_state.editing_prim_id = Some(prim_id);
                             edit_dialog.prim_id = Some(prim_id);
                             edit_dialog.is_new = false;
@@ -105,7 +95,6 @@ pub fn render_context_menu(
 
     if !menu_open {
         context_menu.visible = false;
-        println!("\x1b[91m[Context menu closed]\x1b[0m");
     }
 }
 
@@ -118,19 +107,6 @@ pub fn render_edit_dialog(
     if !edit_dialog.visible {
         return;
     }
-
-    // Debug: Edit dialog is visible
-    let dialog_type = if edit_dialog.is_new { "CREATE" } else { "EDIT" };
-    tracing::info!(dialog_type, name = %edit_dialog.name, "edit dialog open");
-
-    let title = if edit_dialog.is_new { "CREATE" } else { "EDIT" };
-    println!("\x1b[94m=== {} PRIM DIALOG ===", title);
-    println!("Name: {}", edit_dialog.name);
-    println!(
-        "Position: [{:.1}, {:.1}, {:.1}]",
-        edit_dialog.position[0], edit_dialog.position[1], edit_dialog.position[2]
-    );
-    println!("Press [S] to Save, [ESC] to Cancel\x1b[0m");
 
     let ctx = egui.ctx_mut();
     let mut dialog_open = true;
@@ -259,31 +235,6 @@ pub fn render_edit_dialog(
     if !dialog_open {
         edit_dialog.visible = false;
         game_state.editing_prim_id = None;
-        println!("\x1b[91m[Edit dialog closed]\x1b[0m");
-    }
-}
-
-/// Render UI status text overlay for debugging
-pub fn render_ui_overlay(context_menu: Res<ContextMenuState>, edit_dialog: Res<EditDialogState>) {
-    if context_menu.visible {
-        if let Some(prim_id) = context_menu.hit_prim_id {
-            println!("\n>>> CONTEXT MENU VISIBLE - Prim ID: {}", prim_id);
-            println!("    [E] Edit  [D] Delete  [ESC] Cancel");
-        } else {
-            println!("\n>>> CONTEXT MENU VISIBLE - Empty Space");
-            println!("    [C] Create Prim  [ESC] Cancel");
-        }
-    }
-
-    if edit_dialog.visible {
-        let title = if edit_dialog.is_new { "CREATE" } else { "EDIT" };
-        println!("\n>>> {} DIALOG VISIBLE", title);
-        println!("    Name: {}", edit_dialog.name);
-        println!(
-            "    Pos: [{:.1}, {:.1}, {:.1}]",
-            edit_dialog.position[0], edit_dialog.position[1], edit_dialog.position[2]
-        );
-        println!("    [S] Save  [ESC] Cancel");
     }
 }
 

@@ -150,7 +150,6 @@ fn main() {
             systems::ui::render_context_menu,
             systems::ui::render_edit_dialog,
             systems::ui::send_prim_mutations,
-            systems::ui::render_ui_overlay,
         ),
     )
     // Phase 6: Transform gizmos

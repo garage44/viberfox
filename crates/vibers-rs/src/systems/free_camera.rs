@@ -5,6 +5,7 @@ use bevy_atmosphere::prelude::*;
 use bevy_atmosphere::skybox::{self, AtmosphereSkyBoxMaterial};
 
 use crate::resources::{AvatarState, CameraState, CameraMode};
+use crate::systems::gizmo::GizmoState;
 use crate::systems::rendering::RegionMesh;
 
 #[derive(Component)]
@@ -79,6 +80,7 @@ pub fn camera_controls(
     avatar_state: Res<AvatarState>,
     time: Res<Time>,
     region_mesh_query: Query<&GlobalTransform, With<RegionMesh>>,
+    gizmo_state: Res<GizmoState>,
 ) {
     if camera_query.is_empty() {
         return;
@@ -100,8 +102,12 @@ pub fn camera_controls(
                 camera_state.distance = camera_state.distance.max(2.0).min(100.0);
             }
 
-            // Handle mouse drag for rotation
-            if mouse_input.pressed(MouseButton::Left) {
+            // Handle mouse drag for rotation (suppressed while a gizmo axis is being dragged).
+            if gizmo_state.active_axis.is_some() {
+                camera_state.pan_offset = None;
+                // Drain events so they don't accumulate.
+                cursor_moved_events.clear();
+            } else if mouse_input.pressed(MouseButton::Left) {
                 for event in cursor_moved_events.read() {
                     if let Some(last_pos) = camera_state.pan_offset {
                         let delta = event.position - last_pos;
@@ -145,8 +151,12 @@ pub fn camera_controls(
             // Free camera mode - simple FPS style
             let mut rotation_delta = Vec2::ZERO;
 
-            // Mouse look (right mouse button)
-            if mouse_input.pressed(MouseButton::Right) {
+            // Mouse look (left mouse button — right is reserved for context menu).
+            // Suppressed while a gizmo axis is being dragged.
+            if gizmo_state.active_axis.is_some() {
+                camera_state.pan_offset = None;
+                cursor_moved_events.clear();
+            } else if mouse_input.pressed(MouseButton::Left) {
                 for event in cursor_moved_events.read() {
                     if let Some(last_pos) = camera_state.pan_offset {
                         let delta = event.position - last_pos;

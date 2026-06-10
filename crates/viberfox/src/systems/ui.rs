@@ -76,7 +76,7 @@ pub fn render_context_menu(
 
                 if ui.button("Delete Prim (D)").clicked() {
                     tracing::info!(prim_id, "deleting prim");
-                    game_state.prim_to_delete = Some(prim_id);
+                    game_state.prims_to_delete.push(prim_id);
                     context_menu.visible = false;
                 }
             } else {
@@ -236,7 +236,9 @@ pub fn render_edit_dialog(
                 }
 
                 if !edit_dialog.is_new && ui.button("Delete (D)").clicked() {
-                    game_state.prim_to_delete = edit_dialog.prim_id;
+                    if let Some(id) = edit_dialog.prim_id {
+                        game_state.prims_to_delete.push(id);
+                    }
                     edit_dialog.visible = false;
                     game_state.editing_prim_id = None;
                 }
@@ -496,13 +498,10 @@ pub fn send_prim_mutations(
         }
     }
 
-    if let Some(prim_id) = game_state.prim_to_delete.take() {
+    for prim_id in std::mem::take(&mut game_state.prims_to_delete) {
         if let Some(ref db) = db {
             let conn = db.conn.lock().unwrap();
-            let _ = conn.execute(
-                "DELETE FROM prims WHERE id=?1",
-                rusqlite::params![prim_id],
-            );
+            let _ = conn.execute("DELETE FROM prims WHERE id=?1", rusqlite::params![prim_id]);
         }
         for (entity, prim, _) in prim_query.iter() {
             if prim.id == prim_id {

@@ -60,7 +60,23 @@ pub struct GameState {
     pub editing_prim_id: Option<i64>,
     pub pending_prim_save: Option<EditDialogState>,
     pub pending_prim_revert: Option<EditDialogState>,
-    pub prim_to_delete: Option<i64>,
+    /// Queued prim deletions (processed by send_prim_mutations each frame).
+    pub prims_to_delete: Vec<i64>,
+}
+
+/// State for rubber-band (marquee) multi-select.
+#[derive(Resource, Default)]
+pub struct MarqueeState {
+    /// Screen position where the mouse was pressed before we know if it's a click or drag.
+    pub press_pos: Option<Vec2>,
+    /// True while the rubber-band rectangle is being drawn.
+    pub active: bool,
+    /// Fixed corner (where the drag began).
+    pub start: Vec2,
+    /// Trailing corner (tracks the cursor).
+    pub end: Vec2,
+    /// Shift was held at drag start → add to existing selection instead of replacing.
+    pub shift_add: bool,
 }
 
 /// Context menu state for prim interaction (right-click menus)

@@ -104,8 +104,13 @@ pub fn camera_controls(
                 camera_state.distance = camera_state.distance.max(2.0).min(100.0);
             }
 
-            // Handle mouse drag for rotation (suppressed while egui or gizmo has the pointer).
-            if gizmo_state.active_axis.is_some() || egui_manager.ctx.wants_pointer_input() {
+            // Handle mouse drag for rotation (suppressed while egui, gizmo, or Ctrl has the pointer).
+            let ctrl = keyboard_input.pressed(KeyCode::ControlLeft)
+                || keyboard_input.pressed(KeyCode::ControlRight);
+            if gizmo_state.active_axis.is_some()
+                || egui_manager.ctx.wants_pointer_input()
+                || ctrl
+            {
                 camera_state.pan_offset = None;
                 cursor_moved_events.clear();
             } else if mouse_input.pressed(MouseButton::Left) {
@@ -153,8 +158,13 @@ pub fn camera_controls(
             let mut rotation_delta = Vec2::ZERO;
 
             // Mouse look (left mouse button — right is reserved for context menu).
-            // Suppressed while egui or gizmo has the pointer.
-            if gizmo_state.active_axis.is_some() || egui_manager.ctx.wants_pointer_input() {
+            // Suppressed while egui, gizmo, or Ctrl has the pointer.
+            let ctrl = keyboard_input.pressed(KeyCode::ControlLeft)
+                || keyboard_input.pressed(KeyCode::ControlRight);
+            if gizmo_state.active_axis.is_some()
+                || egui_manager.ctx.wants_pointer_input()
+                || ctrl
+            {
                 camera_state.pan_offset = None;
                 cursor_moved_events.clear();
             } else if mouse_input.pressed(MouseButton::Left) {

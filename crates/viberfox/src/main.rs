@@ -15,7 +15,7 @@ mod utils;
 use components::Avatar;
 use resources::{
     AiAssistantState, AiConfig, AvatarState, CameraState, ConnectAddr, ContextMenuState, Database,
-    EditDialogState, GameState, LocalAvatarSimId, MouseState, OsmTileUrlTemplate,
+    EditDialogState, GameState, LocalAvatarSimId, MarqueeState, MouseState, OsmTileUrlTemplate,
 };
 use systems::egui_manager::EguiPlugin;
 use systems::*;
@@ -75,6 +75,7 @@ fn main() {
     .init_resource::<ContextMenuState>()
     .init_resource::<EditDialogState>()
     .init_resource::<systems::gizmo::GizmoState>()
+    .init_resource::<MarqueeState>()
     .insert_resource(AiConfig {
         api_key: std::env::var("ANTHROPIC_KEY").ok(),
         model: std::env::var("ANTHROPIC_MODEL")
@@ -142,11 +143,14 @@ fn main() {
             systems::debug::debug_region_entities.after(rendering::spawn_regions),
         ),
     )
-    // Phase 4: Prim selection and raycasting
+    // Phase 4: Prim selection, raycasting, marquee, keyboard shortcuts
     .add_systems(
         Update,
         (
             systems::picking::prim_picking,
+            systems::picking::update_marquee.after(systems::picking::prim_picking),
+            systems::picking::render_marquee.after(systems::picking::update_marquee),
+            systems::picking::handle_delete_key,
             systems::picking::highlight_selected_prim,
             systems::picking::unhighlight_deselected_prim,
         ),

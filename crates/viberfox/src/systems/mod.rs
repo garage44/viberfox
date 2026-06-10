@@ -1,3 +1,4 @@
+pub mod ai_assistant;
 pub mod avatar;
 pub mod database;
 pub mod debug;
@@ -6,6 +7,7 @@ pub mod free_camera;
 pub mod gizmo;
 pub mod network;
 pub mod picking;
+pub mod prim_ops;
 pub mod rendering;
 pub mod tile_loader;
 pub mod ui;

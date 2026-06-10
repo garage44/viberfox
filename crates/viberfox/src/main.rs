@@ -14,8 +14,8 @@ mod utils;
 
 use components::Avatar;
 use resources::{
-    AvatarState, CameraState, ConnectAddr, ContextMenuState, Database, EditDialogState, GameState,
-    LocalAvatarSimId, MouseState, OsmTileUrlTemplate,
+    AiAssistantState, AiConfig, AvatarState, CameraState, ConnectAddr, ContextMenuState, Database,
+    EditDialogState, GameState, LocalAvatarSimId, MouseState, OsmTileUrlTemplate,
 };
 use systems::egui_manager::EguiPlugin;
 use systems::*;
@@ -29,6 +29,8 @@ struct Cli {
 }
 
 fn main() {
+    dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
@@ -72,7 +74,13 @@ fn main() {
     .init_resource::<OsmTileUrlTemplate>()
     .init_resource::<ContextMenuState>()
     .init_resource::<EditDialogState>()
-    .init_resource::<systems::gizmo::GizmoState>();
+    .init_resource::<systems::gizmo::GizmoState>()
+    .insert_resource(AiConfig {
+        api_key: std::env::var("ANTHROPIC_KEY").ok(),
+        model: std::env::var("ANTHROPIC_MODEL")
+            .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string()),
+    })
+    .init_resource::<AiAssistantState>();
 
     if let Some(addr) = cli.connect {
         app.insert_resource(ConnectAddr(addr));
@@ -151,6 +159,15 @@ fn main() {
             systems::ui::render_edit_dialog,
             systems::ui::apply_live_prim_edits.after(systems::ui::render_edit_dialog),
             systems::ui::send_prim_mutations.after(systems::ui::render_edit_dialog),
+        ),
+    )
+    // Phase 7: AI assistant panel
+    .add_systems(
+        Update,
+        (
+            systems::ai_assistant::render_ai_panel,
+            systems::ai_assistant::poll_ai_response
+                .after(systems::ai_assistant::render_ai_panel),
         ),
     )
     // Phase 6: Transform gizmos

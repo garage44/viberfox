@@ -4,6 +4,49 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc::UnboundedSender;
 use vibe_core::NetMessage;
 
+// ---------------------------------------------------------------------------
+// AI assistant
+// ---------------------------------------------------------------------------
+
+#[derive(Resource)]
+pub struct AiConfig {
+    pub api_key: Option<String>,
+    pub model: String,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            model: "claude-haiku-4-5-20251001".to_string(),
+        }
+    }
+}
+
+pub struct DisplayMessage {
+    pub is_user: bool,
+    pub text: String,
+}
+
+pub type PendingAiResponse = Arc<Mutex<Option<Result<serde_json::Value, String>>>>;
+
+#[derive(Resource, Default)]
+pub struct AiAssistantState {
+    pub open: bool,
+    pub input: String,
+    pub display_messages: Vec<DisplayMessage>,
+    /// Full conversation history in Anthropic Messages API format.
+    pub api_messages: Vec<serde_json::Value>,
+    /// Shared cell written by background thread, polled each frame.
+    pub pending: Option<PendingAiResponse>,
+    /// Set by render_ai_panel when user submits; consumed by poll_ai_response.
+    pub pending_send: bool,
+    /// Number of tool-call rounds in the current turn (safety cap).
+    pub tool_round: u8,
+    pub error: Option<String>,
+    pub scroll_to_bottom: bool,
+}
+
 #[derive(Resource)]
 pub struct Database {
     pub conn: Mutex<Connection>,

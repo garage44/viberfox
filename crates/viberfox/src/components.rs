@@ -29,6 +29,20 @@ pub struct Prim {
     pub path_cut_end: f32,
     /// Hollow ratio (0.0–0.95, default 0.0). Inner radius = outer * hollow.
     pub hollow: f32,
+    /// Twist (degrees) of the cross-section at the path start/end. Default 0/0.
+    pub twist_begin: f32,
+    pub twist_end: f32,
+    /// Taper of the top cross-section per axis (−1.0–1.0, default 0). +X shrinks
+    /// the top, −X shrinks the bottom. `taper_y` maps to the depth (Z) axis.
+    pub taper_x: f32,
+    pub taper_y: f32,
+    /// Top shear: lateral offset of the top relative to the bottom (−0.5–0.5,
+    /// default 0). `top_shear_y` maps to the depth (Z) axis.
+    pub top_shear_x: f32,
+    pub top_shear_y: f32,
+    /// Slice: trims the path to the fraction [begin, end] (default 0.0/1.0).
+    pub slice_begin: f32,
+    pub slice_end: f32,
 }
 
 /// Marker: prim's mesh needs to be rebuilt (shape/path-cut/hollow changed).

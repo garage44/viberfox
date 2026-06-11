@@ -66,6 +66,16 @@ pub fn render_context_menu(
                             edit_dialog.path_cut_begin = prim.path_cut_begin;
                             edit_dialog.path_cut_end = prim.path_cut_end;
                             edit_dialog.hollow = prim.hollow;
+                            edit_dialog.warp = crate::resources::PrimWarp {
+                                twist_begin: prim.twist_begin,
+                                twist_end: prim.twist_end,
+                                taper_x: prim.taper_x,
+                                taper_y: prim.taper_y,
+                                top_shear_x: prim.top_shear_x,
+                                top_shear_y: prim.top_shear_y,
+                                slice_begin: prim.slice_begin,
+                                slice_end: prim.slice_end,
+                            };
                             // Snapshot for Cancel revert.
                             edit_dialog.original_name = prim.name.clone();
                             edit_dialog.original_color = color;
@@ -77,6 +87,7 @@ pub fn render_context_menu(
                             edit_dialog.original_path_cut_begin = prim.path_cut_begin;
                             edit_dialog.original_path_cut_end = prim.path_cut_end;
                             edit_dialog.original_hollow = prim.hollow;
+                            edit_dialog.original_warp = edit_dialog.warp;
                             edit_dialog.texture_picker_open = false;
                             edit_dialog.visible = true;
                             break;
@@ -103,6 +114,7 @@ pub fn render_context_menu(
                     edit_dialog.path_cut_begin = 0.0;
                     edit_dialog.path_cut_end = 1.0;
                     edit_dialog.hollow = 0.0;
+                    edit_dialog.warp = crate::resources::PrimWarp::default();
                     let hit = context_menu.hit_point;
                     // Offset Y so the prim rests on the surface instead of being centred in it.
                     edit_dialog.position = [hit.x, hit.y + 0.5, hit.z];
@@ -309,6 +321,94 @@ pub fn render_edit_dialog(
                     {
                         edit_dialog.hollow = hollow_pct / 100.0;
                     }
+
+                    ui.add_space(4.0);
+
+                    // Twist Begin and End (degrees, −360..360)
+                    ui.label("Twist Begin and End");
+                    ui.horizontal(|ui| {
+                        ui.label("B");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.twist_begin)
+                                .speed(1.0)
+                                .range(-360.0..=360.0)
+                                .suffix("°"),
+                        );
+                        ui.label("E");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.twist_end)
+                                .speed(1.0)
+                                .range(-360.0..=360.0)
+                                .suffix("°"),
+                        );
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Taper (−1..1 per axis)
+                    ui.label("Taper");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.taper_x)
+                                .prefix("X ")
+                                .speed(0.01)
+                                .range(-1.0..=1.0)
+                                .max_decimals(2),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.taper_y)
+                                .prefix("Y ")
+                                .speed(0.01)
+                                .range(-1.0..=1.0)
+                                .max_decimals(2),
+                        );
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Top Shear (−0.5..0.5 per axis)
+                    ui.label("Top Shear");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.top_shear_x)
+                                .prefix("X ")
+                                .speed(0.01)
+                                .range(-0.5..=0.5)
+                                .max_decimals(2),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.top_shear_y)
+                                .prefix("Y ")
+                                .speed(0.01)
+                                .range(-0.5..=0.5)
+                                .max_decimals(2),
+                        );
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Slice Begin and End (trims the path 0..1, begin ≤ end)
+                    ui.label("Slice Begin and End");
+                    ui.horizontal(|ui| {
+                        let sb = edit_dialog.warp.slice_begin;
+                        let se = edit_dialog.warp.slice_end;
+                        ui.label("B");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.slice_begin)
+                                .speed(0.005)
+                                .range(0.0..=se)
+                                .min_decimals(3)
+                                .max_decimals(3),
+                        );
+                        ui.label("E");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.warp.slice_end)
+                                .speed(0.005)
+                                .range(sb..=1.0)
+                                .min_decimals(3)
+                                .max_decimals(3),
+                        );
+                    });
                 }
                 // ── Texture tab ─────────────────────────────────────────────
                 _ => {
@@ -517,13 +617,15 @@ pub fn apply_live_prim_edits(
         let geom_changed = new_shape != prim.shape
             || (edit_dialog.path_cut_begin - prim.path_cut_begin).abs() > 0.001
             || (edit_dialog.path_cut_end - prim.path_cut_end).abs() > 0.001
-            || (edit_dialog.hollow - prim.hollow).abs() > 0.001;
+            || (edit_dialog.hollow - prim.hollow).abs() > 0.001
+            || warp_differs(&edit_dialog.warp, &prim);
 
         if geom_changed {
             prim.shape = new_shape;
             prim.path_cut_begin = edit_dialog.path_cut_begin;
             prim.path_cut_end = edit_dialog.path_cut_end;
             prim.hollow = edit_dialog.hollow;
+            apply_warp(&mut prim, &edit_dialog.warp);
             commands.entity(entity).insert(NeedsMeshRebuild);
         }
 
@@ -559,8 +661,47 @@ fn push_revert(game_state: &mut GameState, dialog: &EditDialogState) {
             path_cut_begin: dialog.original_path_cut_begin,
             path_cut_end: dialog.original_path_cut_end,
             hollow: dialog.original_hollow,
+            warp: dialog.original_warp,
             ..Default::default()
         });
+    }
+}
+
+/// True when any twist/taper/top-shear/slice value differs from the prim's.
+fn warp_differs(w: &crate::resources::PrimWarp, prim: &Prim) -> bool {
+    (w.twist_begin - prim.twist_begin).abs() > 0.001
+        || (w.twist_end - prim.twist_end).abs() > 0.001
+        || (w.taper_x - prim.taper_x).abs() > 0.001
+        || (w.taper_y - prim.taper_y).abs() > 0.001
+        || (w.top_shear_x - prim.top_shear_x).abs() > 0.001
+        || (w.top_shear_y - prim.top_shear_y).abs() > 0.001
+        || (w.slice_begin - prim.slice_begin).abs() > 0.001
+        || (w.slice_end - prim.slice_end).abs() > 0.001
+}
+
+/// Copy the dialog's warp parameters onto a prim component.
+fn apply_warp(prim: &mut Prim, w: &crate::resources::PrimWarp) {
+    prim.twist_begin = w.twist_begin;
+    prim.twist_end = w.twist_end;
+    prim.taper_x = w.taper_x;
+    prim.taper_y = w.taper_y;
+    prim.top_shear_x = w.top_shear_x;
+    prim.top_shear_y = w.top_shear_y;
+    prim.slice_begin = w.slice_begin;
+    prim.slice_end = w.slice_end;
+}
+
+/// Convert dialog warp (f32) into DB params (f64).
+fn warp_params(w: &crate::resources::PrimWarp) -> crate::systems::prim_ops::WarpParams {
+    crate::systems::prim_ops::WarpParams {
+        twist_begin: w.twist_begin as f64,
+        twist_end: w.twist_end as f64,
+        taper_x: w.taper_x as f64,
+        taper_y: w.taper_y as f64,
+        top_shear_x: w.top_shear_x as f64,
+        top_shear_y: w.top_shear_y as f64,
+        slice_begin: w.slice_begin as f64,
+        slice_end: w.slice_end as f64,
     }
 }
 
@@ -612,6 +753,7 @@ pub fn send_prim_mutations(
                     dialog_state.path_cut_begin as f64,
                     dialog_state.path_cut_end as f64,
                     dialog_state.hollow as f64,
+                    warp_params(&dialog_state.warp),
                 )
                 .ok()
             });
@@ -632,6 +774,14 @@ pub fn send_prim_mutations(
                         path_cut_begin: dialog_state.path_cut_begin,
                         path_cut_end: dialog_state.path_cut_end,
                         hollow: dialog_state.hollow,
+                        twist_begin: dialog_state.warp.twist_begin,
+                        twist_end: dialog_state.warp.twist_end,
+                        taper_x: dialog_state.warp.taper_x,
+                        taper_y: dialog_state.warp.taper_y,
+                        top_shear_x: dialog_state.warp.top_shear_x,
+                        top_shear_y: dialog_state.warp.top_shear_y,
+                        slice_begin: dialog_state.warp.slice_begin,
+                        slice_end: dialog_state.warp.slice_end,
                     },
                     Transform::from_xyz(
                         dialog_state.position[0],
@@ -687,6 +837,7 @@ pub fn send_prim_mutations(
                     dialog_state.path_cut_begin as f64,
                     dialog_state.path_cut_end as f64,
                     dialog_state.hollow as f64,
+                    warp_params(&dialog_state.warp),
                 );
             }
             for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
@@ -695,7 +846,8 @@ pub fn send_prim_mutations(
                     let geom_changed = prim.shape != PrimShape::from_str(&dialog_state.shape)
                         || (prim.path_cut_begin - dialog_state.path_cut_begin).abs() > 0.0001
                         || (prim.path_cut_end - dialog_state.path_cut_end).abs() > 0.0001
-                        || (prim.hollow - dialog_state.hollow).abs() > 0.0001;
+                        || (prim.hollow - dialog_state.hollow).abs() > 0.0001
+                        || warp_differs(&dialog_state.warp, &prim);
 
                     prim.name = dialog_state.name.clone();
                     prim.shape = PrimShape::from_str(&dialog_state.shape);
@@ -708,6 +860,7 @@ pub fn send_prim_mutations(
                     prim.path_cut_begin = dialog_state.path_cut_begin;
                     prim.path_cut_end = dialog_state.path_cut_end;
                     prim.hollow = dialog_state.hollow;
+                    apply_warp(&mut prim, &dialog_state.warp);
                     *transform = Transform::from_xyz(
                         dialog_state.position[0],
                         dialog_state.position[1],
@@ -752,7 +905,8 @@ pub fn send_prim_mutations(
                     let geom_changed = prim.shape != PrimShape::from_str(&revert.shape)
                         || (prim.path_cut_begin - revert.path_cut_begin).abs() > 0.0001
                         || (prim.path_cut_end - revert.path_cut_end).abs() > 0.0001
-                        || (prim.hollow - revert.hollow).abs() > 0.0001;
+                        || (prim.hollow - revert.hollow).abs() > 0.0001
+                        || warp_differs(&revert.warp, &prim);
 
                     prim.name = revert.name.clone();
                     prim.shape = PrimShape::from_str(&revert.shape);
@@ -761,6 +915,7 @@ pub fn send_prim_mutations(
                     prim.path_cut_begin = revert.path_cut_begin;
                     prim.path_cut_end = revert.path_cut_end;
                     prim.hollow = revert.hollow;
+                    apply_warp(&mut prim, &revert.warp);
                     *transform = Transform::from_xyz(
                         revert.position[0],
                         revert.position[1],

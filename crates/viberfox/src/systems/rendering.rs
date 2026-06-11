@@ -3,7 +3,7 @@ use crate::resources::PrimTextureCache;
 use crate::systems::tile_loader::{RegionTile, TileKey};
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
 use vibe_core::world::REGION_SIZE_METERS;
 
@@ -207,10 +207,16 @@ fn prim_mesh_handle(prim: &Prim, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
     let begin = prim.path_cut_begin.clamp(0.0, 1.0);
     let end = prim.path_cut_end.clamp(0.0, 1.0);
     let hollow = prim.hollow.clamp(0.0, 0.95);
+    let slice_begin = prim.slice_begin.clamp(0.0, 1.0);
+    let slice_end = prim.slice_end.clamp(slice_begin, 1.0);
+    let warp = WarpDeform::from_prim(prim);
 
-    let needs_custom = begin > 0.001 || end < 0.999 || hollow > 0.001;
+    let has_cut = begin > 0.001 || end < 0.999 || hollow > 0.001;
+    let has_slice = slice_begin > 0.001 || slice_end < 0.999;
+    let has_warp = warp.is_active();
 
-    if !needs_custom {
+    // No deformation at all → use the cheap built-in primitive meshes.
+    if !has_cut && !has_slice && !has_warp {
         return match prim.shape {
             PrimShape::Box => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             PrimShape::Sphere => meshes.add(Sphere::new(0.5)),
@@ -220,35 +226,136 @@ fn prim_mesh_handle(prim: &Prim, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
         };
     }
 
-    match prim.shape {
+    let mut mesh = match prim.shape {
         PrimShape::Cylinder => {
-            meshes.add(build_cylinder_like_mesh(0.5, 0.5, begin, end, hollow))
+            build_cylinder_like_mesh(0.5, 0.5, begin, end, hollow, slice_begin, slice_end)
         }
         PrimShape::Cone => {
-            meshes.add(build_cylinder_like_mesh(0.0, 0.5, begin, end, hollow))
+            build_cylinder_like_mesh(0.0, 0.5, begin, end, hollow, slice_begin, slice_end)
         }
-        PrimShape::Box => meshes.add(build_box_mesh(begin, end, hollow)),
-        PrimShape::Sphere => meshes.add(build_sphere_mesh(begin, end, hollow)),
-        // Torus: path-cut/hollow stored but not yet reflected in mesh.
-        PrimShape::Torus => meshes.add(Torus::default()),
+        PrimShape::Box => build_box_mesh(begin, end, hollow, slice_begin, slice_end),
+        PrimShape::Sphere => build_sphere_mesh(begin, end, hollow, slice_begin, slice_end),
+        // Torus: path-cut/hollow/slice not yet reflected, but warp still applies.
+        PrimShape::Torus => Torus::default().mesh().build(),
+    };
+
+    if has_warp {
+        warp.apply(&mut mesh);
+    }
+    meshes.add(mesh)
+}
+
+/// Twist / taper / top-shear applied as a post-process vertex deformation, so it
+/// works uniformly across every base mesh. Each vertex is transformed as a
+/// function of its path fraction `f = y + 0.5` (0 at the bottom, 1 at the top).
+struct WarpDeform {
+    twist_begin: f32, // radians at the bottom
+    twist_end: f32,   // radians at the top
+    taper_x: f32,
+    taper_z: f32,
+    shear_x: f32,
+    shear_z: f32,
+}
+
+impl WarpDeform {
+    fn from_prim(p: &Prim) -> Self {
+        // SL's profile axes (X, Y) map to our world (X, Z); the path is Y-up.
+        Self {
+            twist_begin: p.twist_begin.to_radians(),
+            twist_end: p.twist_end.to_radians(),
+            taper_x: p.taper_x.clamp(-1.0, 1.0),
+            taper_z: p.taper_y.clamp(-1.0, 1.0),
+            shear_x: p.top_shear_x.clamp(-0.5, 0.5),
+            shear_z: p.top_shear_y.clamp(-0.5, 0.5),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.twist_begin.abs() > 1e-4
+            || self.twist_end.abs() > 1e-4
+            || self.taper_x.abs() > 1e-4
+            || self.taper_z.abs() > 1e-4
+            || self.shear_x.abs() > 1e-4
+            || self.shear_z.abs() > 1e-4
+    }
+
+    fn twist_angle(&self, f: f32) -> f32 {
+        self.twist_begin + (self.twist_end - self.twist_begin) * f
+    }
+
+    fn apply(&self, mesh: &mut Mesh) {
+        // Taper scale per axis: +t shrinks the top, −t shrinks the bottom.
+        let taper_scale = |t: f32, f: f32| {
+            let bot = 1.0 + t.min(0.0);
+            let top = 1.0 - t.max(0.0);
+            bot + (top - bot) * f
+        };
+
+        // Positions: taper → twist → shear (shear stays world-aligned, applied last).
+        let mut ys: Vec<f32> = Vec::new();
+        if let Some(VertexAttributeValues::Float32x3(pos)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+        {
+            ys.reserve(pos.len());
+            for p in pos.iter_mut() {
+                let f = (p[1] + 0.5).clamp(0.0, 1.0);
+                ys.push(p[1]);
+                let mut x = p[0] * taper_scale(self.taper_x, f);
+                let mut z = p[2] * taper_scale(self.taper_z, f);
+                let (s, c) = self.twist_angle(f).sin_cos();
+                let (rx, rz) = (x * c - z * s, x * s + z * c);
+                x = rx + self.shear_x * f;
+                z = rz + self.shear_z * f;
+                p[0] = x;
+                p[2] = z;
+            }
+        } else {
+            return;
+        }
+
+        // Normals: rotate by the same twist angle (taper/shear tilt is ignored).
+        if let Some(VertexAttributeValues::Float32x3(norms)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+        {
+            for (nrm, &y) in norms.iter_mut().zip(ys.iter()) {
+                let f = (y + 0.5).clamp(0.0, 1.0);
+                let (s, c) = self.twist_angle(f).sin_cos();
+                let (nx, nz) = (nrm[0] * c - nrm[2] * s, nrm[0] * s + nrm[2] * c);
+                let len = (nx * nx + nrm[1] * nrm[1] + nz * nz).sqrt().max(1e-6);
+                nrm[0] = nx / len;
+                nrm[1] /= len;
+                nrm[2] = nz / len;
+            }
+        }
     }
 }
 
-/// Cylinder or cone mesh with optional angular path cut and hollow.
+/// Cylinder or cone mesh with optional angular path cut, hollow, and slice.
 ///
-/// `top_r` = top-face radius (0 for cone, 0.5 for cylinder).
-/// `bot_r` = bottom-face radius (always 0.5).
+/// `top_r_full` = top-face radius at the full path end (0 for cone, 0.5 for cylinder).
+/// `bot_r_full` = bottom-face radius at the full path start (always 0.5).
+/// `slice_begin`/`slice_end` trim the extrusion along Y; a sliced cone becomes a
+/// frustum because the segment radii are interpolated at the slice boundaries.
 /// Angles sweep counterclockwise around the Y axis.
 fn build_cylinder_like_mesh(
-    top_r: f32,
-    bot_r: f32,
+    top_r_full: f32,
+    bot_r_full: f32,
     path_cut_begin: f32,
     path_cut_end: f32,
     hollow: f32,
+    slice_begin: f32,
+    slice_end: f32,
 ) -> Mesh {
     use std::f32::consts::TAU;
 
     let segments: usize = 32;
+    // Slice trims the path; radii are sampled at the slice boundaries so a cut
+    // cone keeps the correct (truncated) profile.
+    let radius_at = |f: f32| bot_r_full + (top_r_full - bot_r_full) * f;
+    let top_r = radius_at(slice_end);
+    let bot_r = radius_at(slice_begin);
+    let y_top = slice_end - 0.5;
+    let y_bot = slice_begin - 0.5;
     let inner_top_r = top_r * hollow;
     let inner_bot_r = bot_r * hollow;
     let is_hollow = hollow > 0.001;
@@ -284,11 +391,11 @@ fn build_cylinder_like_mesh(
         let r_top = top_r;
         let r_bot = bot_r;
         // top
-        positions.push([r_top * cos_a, 0.5, r_top * sin_a]);
+        positions.push([r_top * cos_a, y_top, r_top * sin_a]);
         normals.push([cos_a, 0.0, sin_a]);
         uvs.push([t, 0.0]);
         // bottom
-        positions.push([r_bot * cos_a, -0.5, r_bot * sin_a]);
+        positions.push([r_bot * cos_a, y_bot, r_bot * sin_a]);
         normals.push([cos_a, 0.0, sin_a]);
         uvs.push([t, 1.0]);
     }
@@ -306,11 +413,11 @@ fn build_cylinder_like_mesh(
             let a = begin_a + t * sweep;
             let (cos_a, sin_a) = (a.cos(), a.sin());
             // top (inner normal points inward)
-            positions.push([inner_top_r * cos_a, 0.5, inner_top_r * sin_a]);
+            positions.push([inner_top_r * cos_a, y_top, inner_top_r * sin_a]);
             normals.push([-cos_a, 0.0, -sin_a]);
             uvs.push([t, 0.0]);
             // bottom
-            positions.push([inner_bot_r * cos_a, -0.5, inner_bot_r * sin_a]);
+            positions.push([inner_bot_r * cos_a, y_bot, inner_bot_r * sin_a]);
             normals.push([-cos_a, 0.0, -sin_a]);
             uvs.push([t, 1.0]);
         }
@@ -326,7 +433,7 @@ fn build_cylinder_like_mesh(
         if !is_hollow {
             // Fan from center
             let center = positions.len() as u32;
-            positions.push([0.0, 0.5, 0.0]);
+            positions.push([0.0, y_top, 0.0]);
             normals.push([0.0, 1.0, 0.0]);
             uvs.push([0.5, 0.5]);
             let ring_start = positions.len() as u32;
@@ -334,7 +441,7 @@ fn build_cylinder_like_mesh(
                 let t = i as f32 / arc_steps as f32;
                 let a = begin_a + t * sweep;
                 let (cos_a, sin_a) = (a.cos(), a.sin());
-                positions.push([top_r * cos_a, 0.5, top_r * sin_a]);
+                positions.push([top_r * cos_a, y_top, top_r * sin_a]);
                 normals.push([0.0, 1.0, 0.0]);
                 uvs.push([0.5 + 0.5 * cos_a, 0.5 + 0.5 * sin_a]);
             }
@@ -351,10 +458,10 @@ fn build_cylinder_like_mesh(
                 let t = i as f32 / arc_steps as f32;
                 let a = begin_a + t * sweep;
                 let (cos_a, sin_a) = (a.cos(), a.sin());
-                positions.push([top_r * cos_a, 0.5, top_r * sin_a]);
+                positions.push([top_r * cos_a, y_top, top_r * sin_a]);
                 normals.push([0.0, 1.0, 0.0]);
                 uvs.push([0.5 + 0.5 * cos_a, 0.5 + 0.5 * sin_a]);
-                positions.push([inner_top_r * cos_a, 0.5, inner_top_r * sin_a]);
+                positions.push([inner_top_r * cos_a, y_top, inner_top_r * sin_a]);
                 normals.push([0.0, 1.0, 0.0]);
                 uvs.push([0.5 + inner_top_r * cos_a, 0.5 + inner_top_r * sin_a]);
             }
@@ -370,7 +477,7 @@ fn build_cylinder_like_mesh(
     {
         if !is_hollow {
             let center = positions.len() as u32;
-            positions.push([0.0, -0.5, 0.0]);
+            positions.push([0.0, y_bot, 0.0]);
             normals.push([0.0, -1.0, 0.0]);
             uvs.push([0.5, 0.5]);
             let ring_start = positions.len() as u32;
@@ -378,7 +485,7 @@ fn build_cylinder_like_mesh(
                 let t = i as f32 / arc_steps as f32;
                 let a = begin_a + t * sweep;
                 let (cos_a, sin_a) = (a.cos(), a.sin());
-                positions.push([bot_r * cos_a, -0.5, bot_r * sin_a]);
+                positions.push([bot_r * cos_a, y_bot, bot_r * sin_a]);
                 normals.push([0.0, -1.0, 0.0]);
                 uvs.push([0.5 + 0.5 * cos_a, 0.5 + 0.5 * sin_a]);
             }
@@ -394,10 +501,10 @@ fn build_cylinder_like_mesh(
                 let t = i as f32 / arc_steps as f32;
                 let a = begin_a + t * sweep;
                 let (cos_a, sin_a) = (a.cos(), a.sin());
-                positions.push([bot_r * cos_a, -0.5, bot_r * sin_a]);
+                positions.push([bot_r * cos_a, y_bot, bot_r * sin_a]);
                 normals.push([0.0, -1.0, 0.0]);
                 uvs.push([0.5 + 0.5 * cos_a, 0.5 + 0.5 * sin_a]);
-                positions.push([inner_bot_r * cos_a, -0.5, inner_bot_r * sin_a]);
+                positions.push([inner_bot_r * cos_a, y_bot, inner_bot_r * sin_a]);
                 normals.push([0.0, -1.0, 0.0]);
                 uvs.push([0.5 + inner_bot_r * cos_a, 0.5 + inner_bot_r * sin_a]);
             }
@@ -422,6 +529,8 @@ fn build_cylinder_like_mesh(
             bot_r,
             inner_top_r,
             inner_bot_r,
+            y_top,
+            y_bot,
             is_hollow,
             true,
         );
@@ -436,6 +545,8 @@ fn build_cylinder_like_mesh(
             bot_r,
             inner_top_r,
             inner_bot_r,
+            y_top,
+            y_bot,
             is_hollow,
             false,
         );
@@ -463,6 +574,8 @@ fn push_cut_cap(
     bot_r: f32,
     inner_top_r: f32,
     inner_bot_r: f32,
+    y_top: f32,
+    y_bot: f32,
     is_hollow: bool,
     is_start: bool,
 ) {
@@ -492,19 +605,19 @@ fn push_cut_cap(
     let (ob_x, ob_z) = (bot_r * cos_a, bot_r * sin_a);
 
     // outer_top (0)
-    positions.push([ot_x, 0.5, ot_z]);
+    positions.push([ot_x, y_top, ot_z]);
     normals.push(n);
     uvs.push([1.0, 0.0]);
     // outer_bot (1)
-    positions.push([ob_x, -0.5, ob_z]);
+    positions.push([ob_x, y_bot, ob_z]);
     normals.push(n);
     uvs.push([1.0, 1.0]);
     // inner_bot (2)
-    positions.push([ib_x, -0.5, ib_z]);
+    positions.push([ib_x, y_bot, ib_z]);
     normals.push(n);
     uvs.push([0.0, 1.0]);
     // inner_top (3)
-    positions.push([it_x, 0.5, it_z]);
+    positions.push([it_x, y_top, it_z]);
     normals.push(n);
     uvs.push([0.0, 0.0]);
 
@@ -523,7 +636,13 @@ fn push_cut_cap(
 /// axis) and hollow (an inner square shell). The square cross-section is clipped
 /// to the angular sector `[begin, end]` (turns, 0..1) measured CCW around the Y
 /// axis — the same path-cut convention used for the cylinder.
-fn build_box_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mesh {
+fn build_box_mesh(
+    path_cut_begin: f32,
+    path_cut_end: f32,
+    hollow: f32,
+    slice_begin: f32,
+    slice_end: f32,
+) -> Mesh {
     use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
 
     let is_hollow = hollow > 0.001;
@@ -560,7 +679,8 @@ fn build_box_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mesh {
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    let (y_top, y_bot) = (0.5_f32, -0.5_f32);
+    // Slice trims the extrusion along Y (the box is uniform, so only the caps move).
+    let (y_top, y_bot) = (slice_end - 0.5, slice_begin - 0.5);
 
     // Outward normal of the square edge that a wall segment lies on.
     let face_normal = |mid: Vec3| -> Vec3 {
@@ -637,16 +757,30 @@ fn build_box_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mesh {
     finish_mesh(positions, normals, uvs, indices)
 }
 
-/// UV-sphere mesh with optional angular path cut (a longitudinal wedge) and
-/// hollow (an inner sphere shell). Longitude is swept over `[begin, end]` turns
-/// CCW about the Y axis; latitude always spans pole to pole.
-fn build_sphere_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mesh {
+/// UV-sphere mesh with optional angular path cut (a longitudinal wedge), hollow
+/// (an inner sphere shell), and slice (a latitude trim / dimple). Longitude is
+/// swept over `[begin, end]` turns CCW about the Y axis; latitude is trimmed to
+/// the slice band (`slice` 0 = south pole, 1 = north pole).
+fn build_sphere_mesh(
+    path_cut_begin: f32,
+    path_cut_end: f32,
+    hollow: f32,
+    slice_begin: f32,
+    slice_end: f32,
+) -> Mesh {
     use std::f32::consts::{PI, TAU};
 
     let stacks: usize = 16; // latitude divisions
     let r = 0.5_f32;
     let inner_r = r * hollow;
     let is_hollow = hollow > 0.001;
+
+    // Slice trims latitude. Path fraction 0 = south pole (lat = PI), 1 = north
+    // pole (lat = 0), matching the box/cylinder convention (0 = bottom).
+    let is_sliced = slice_begin > 0.001 || slice_end < 0.999;
+    let lat_min = PI * (1.0 - slice_end); // top boundary (smaller latitude)
+    let lat_max = PI * (1.0 - slice_begin); // bottom boundary
+    let lat_span = (lat_max - lat_min).max(0.0);
 
     let begin_a = path_cut_begin * TAU;
     let end_a = path_cut_end * TAU;
@@ -673,7 +807,7 @@ fn build_sphere_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mes
         let base = positions.len() as u32;
         for i in 0..=stacks {
             let v = i as f32 / stacks as f32;
-            let lat = v * PI; // 0 (north) .. PI (south)
+            let lat = lat_min + v * lat_span;
             let (slat, clat) = lat.sin_cos();
             for j in 0..=slices {
                 let t = j as f32 / slices as f32;
@@ -712,7 +846,7 @@ fn build_sphere_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mes
             let (s, c) = angle.sin_cos();
             let n = Vec3::new(s * sign, 0.0, -c * sign);
             let merid = |rad: f32, i: usize| -> Vec3 {
-                let lat = i as f32 / stacks as f32 * PI;
+                let lat = lat_min + i as f32 / stacks as f32 * lat_span;
                 let (slat, clat) = lat.sin_cos();
                 Vec3::new(slat * c, clat, slat * s) * rad
             };
@@ -727,6 +861,37 @@ fn build_sphere_mesh(path_cut_begin: f32, path_cut_end: f32, hollow: f32) -> Mes
                 };
                 push_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
                     [o0, o1, inner1, inner0], n);
+            }
+        }
+    }
+
+    // Slice caps: flat disc (or annulus when hollow) closing each trimmed
+    // latitude boundary, swept over the cut longitude range.
+    if is_sliced {
+        for (lat, up) in [(lat_min, true), (lat_max, false)] {
+            let (slat, clat) = lat.sin_cos();
+            let ring_r = r * slat;
+            if ring_r <= 1e-4 {
+                continue; // boundary is a pole — nothing to cap
+            }
+            let y = r * clat;
+            let inner_ring_r = inner_r * slat;
+            let n = if up { Vec3::Y } else { Vec3::NEG_Y };
+            for k in 0..slices {
+                let a0 = begin_a + k as f32 / slices as f32 * sweep;
+                let a1 = begin_a + (k + 1) as f32 / slices as f32 * sweep;
+                let o0 = Vec3::new(ring_r * a0.cos(), y, ring_r * a0.sin());
+                let o1 = Vec3::new(ring_r * a1.cos(), y, ring_r * a1.sin());
+                if is_hollow {
+                    let i0 = Vec3::new(inner_ring_r * a0.cos(), y, inner_ring_r * a0.sin());
+                    let i1 = Vec3::new(inner_ring_r * a1.cos(), y, inner_ring_r * a1.sin());
+                    push_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+                        [o0, o1, i1, i0], n);
+                } else {
+                    let center = Vec3::new(0.0, y, 0.0);
+                    push_tri(&mut positions, &mut normals, &mut uvs, &mut indices,
+                        [center, o0, o1], n);
+                }
             }
         }
     }

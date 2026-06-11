@@ -488,6 +488,7 @@ fn run_tool(
                     0.0,
                     1.0,
                     0.0,
+                    prim_ops::WarpParams::default(),
                 )
                 .ok()
             });
@@ -505,6 +506,14 @@ fn run_tool(
                             path_cut_begin: 0.0,
                             path_cut_end: 1.0,
                             hollow: 0.0,
+                            twist_begin: 0.0,
+                            twist_end: 0.0,
+                            taper_x: 0.0,
+                            taper_y: 0.0,
+                            top_shear_x: 0.0,
+                            top_shear_y: 0.0,
+                            slice_begin: 0.0,
+                            slice_end: 1.0,
                         },
                         Transform::from_xyz(pos.x, pos.y, pos.z)
                             .with_scale(Vec3::new(scale.x, scale.y, scale.z)),
@@ -523,7 +532,7 @@ fn run_tool(
 
             // Find current values to merge with partial updates
             let existing = prim_query.iter().find(|(_, p, _)| p.id == prim_id);
-            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color, cur_pcb, cur_pce, cur_hollow) = match existing {
+            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color, cur_pcb, cur_pce, cur_hollow, cur_warp) = match existing {
                 Some((_, p, t)) => {
                     let lin = p.color.to_linear();
                     (
@@ -535,6 +544,16 @@ fn run_tool(
                         p.path_cut_begin,
                         p.path_cut_end,
                         p.hollow,
+                        prim_ops::WarpParams {
+                            twist_begin: p.twist_begin as f64,
+                            twist_end: p.twist_end as f64,
+                            taper_x: p.taper_x as f64,
+                            taper_y: p.taper_y as f64,
+                            top_shear_x: p.top_shear_x as f64,
+                            top_shear_y: p.top_shear_y as f64,
+                            slice_begin: p.slice_begin as f64,
+                            slice_end: p.slice_end as f64,
+                        },
                     )
                 }
                 None => return format!("Error: prim {} not found", prim_id),
@@ -582,6 +601,7 @@ fn run_tool(
                     cur_pcb as f64,
                     cur_pce as f64,
                     cur_hollow as f64,
+                    cur_warp,
                 );
             }
 
@@ -601,6 +621,14 @@ fn run_tool(
                         path_cut_begin: cur_pcb,
                         path_cut_end: cur_pce,
                         hollow: cur_hollow,
+                        twist_begin: cur_warp.twist_begin as f32,
+                        twist_end: cur_warp.twist_end as f32,
+                        taper_x: cur_warp.taper_x as f32,
+                        taper_y: cur_warp.taper_y as f32,
+                        top_shear_x: cur_warp.top_shear_x as f32,
+                        top_shear_y: cur_warp.top_shear_y as f32,
+                        slice_begin: cur_warp.slice_begin as f32,
+                        slice_end: cur_warp.slice_end as f32,
                     },
                     Transform::from_xyz(new_pos.x, new_pos.y, new_pos.z)
                         .with_scale(Vec3::new(new_scale.x, new_scale.y, new_scale.z)),

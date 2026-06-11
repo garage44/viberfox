@@ -86,6 +86,14 @@ pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<Prim
                 path_cut_begin: 0.0,
                 path_cut_end: 1.0,
                 hollow: 0.0,
+                twist_begin: 0.0,
+                twist_end: 0.0,
+                taper_x: 0.0,
+                taper_y: 0.0,
+                top_shear_x: 0.0,
+                top_shear_y: 0.0,
+                slice_begin: 0.0,
+                slice_end: 1.0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -236,6 +244,14 @@ fn select_prim_by_id(conn: &Connection, prim_id: i64) -> anyhow::Result<Option<P
                 path_cut_begin: 0.0,
                 path_cut_end: 1.0,
                 hollow: 0.0,
+                twist_begin: 0.0,
+                twist_end: 0.0,
+                taper_x: 0.0,
+                taper_y: 0.0,
+                top_shear_x: 0.0,
+                top_shear_y: 0.0,
+                slice_begin: 0.0,
+                slice_end: 1.0,
             })
         })
         .optional()?;

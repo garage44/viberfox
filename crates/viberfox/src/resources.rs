@@ -105,6 +105,35 @@ pub struct ContextMenuState {
     pub hit_region_id: Option<i64>,
 }
 
+/// Twist / taper / top-shear / slice parameters edited together in the dialog.
+/// Grouped to avoid duplicating eight fields for both the live and revert copies.
+#[derive(Debug, Clone, Copy)]
+pub struct PrimWarp {
+    pub twist_begin: f32,
+    pub twist_end: f32,
+    pub taper_x: f32,
+    pub taper_y: f32,
+    pub top_shear_x: f32,
+    pub top_shear_y: f32,
+    pub slice_begin: f32,
+    pub slice_end: f32,
+}
+
+impl Default for PrimWarp {
+    fn default() -> Self {
+        Self {
+            twist_begin: 0.0,
+            twist_end: 0.0,
+            taper_x: 0.0,
+            taper_y: 0.0,
+            top_shear_x: 0.0,
+            top_shear_y: 0.0,
+            slice_begin: 0.0,
+            slice_end: 1.0,
+        }
+    }
+}
+
 /// Edit dialog state for prim properties
 #[derive(Resource, Debug, Clone)]
 pub struct EditDialogState {
@@ -123,6 +152,7 @@ pub struct EditDialogState {
     pub path_cut_begin: f32,
     pub path_cut_end: f32,
     pub hollow: f32,
+    pub warp: PrimWarp,
     // Snapshot taken when the dialog opens; used to build a revert payload on Cancel.
     pub original_name: String,
     pub original_shape: String,
@@ -134,6 +164,7 @@ pub struct EditDialogState {
     pub original_path_cut_begin: f32,
     pub original_path_cut_end: f32,
     pub original_hollow: f32,
+    pub original_warp: PrimWarp,
 }
 
 impl Default for EditDialogState {
@@ -154,6 +185,7 @@ impl Default for EditDialogState {
             path_cut_begin: 0.0,
             path_cut_end: 1.0,
             hollow: 0.0,
+            warp: PrimWarp::default(),
             original_name: String::new(),
             original_shape: String::new(),
             original_position: [0.0; 3],
@@ -164,6 +196,7 @@ impl Default for EditDialogState {
             original_path_cut_begin: 0.0,
             original_path_cut_end: 1.0,
             original_hollow: 0.0,
+            original_warp: PrimWarp::default(),
         }
     }
 }

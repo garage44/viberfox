@@ -69,6 +69,19 @@ pub fn init_database(db_path: &str) -> Result<Connection> {
         "ALTER TABLE prims ADD COLUMN hollow REAL NOT NULL DEFAULT 0.0",
         [],
     );
+    // Add twist / taper / top-shear / slice columns (migration for existing dbs).
+    for stmt in [
+        "ALTER TABLE prims ADD COLUMN twist_begin REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN twist_end REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN taper_x REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN taper_y REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN top_shear_x REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN top_shear_y REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN slice_begin REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN slice_end REAL NOT NULL DEFAULT 1.0",
+    ] {
+        let _ = conn.execute(stmt, []);
+    }
 
     // Create index on region_id
     conn.execute(
@@ -150,6 +163,14 @@ pub struct PrimRow {
     pub path_cut_begin: f32,
     pub path_cut_end: f32,
     pub hollow: f32,
+    pub twist_begin: f32,
+    pub twist_end: f32,
+    pub taper_x: f32,
+    pub taper_y: f32,
+    pub top_shear_x: f32,
+    pub top_shear_y: f32,
+    pub slice_begin: f32,
+    pub slice_end: f32,
     pub created_at: String,
     pub updated_at: String,
 }

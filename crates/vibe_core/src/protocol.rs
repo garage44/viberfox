@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::error::ProtocolError;
 
 /// Bump when the app-frame layout or postcard schema changes incompatibly.
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 
 const APP_HEADER_LEN: usize = 8;
 
@@ -98,9 +98,29 @@ pub struct PrimDto {
     pub path_cut_end: f32,
     #[serde(default)]
     pub hollow: f32,
+    #[serde(default)]
+    pub twist_begin: f32,
+    #[serde(default)]
+    pub twist_end: f32,
+    #[serde(default)]
+    pub taper_x: f32,
+    #[serde(default)]
+    pub taper_y: f32,
+    #[serde(default)]
+    pub top_shear_x: f32,
+    #[serde(default)]
+    pub top_shear_y: f32,
+    #[serde(default)]
+    pub slice_begin: f32,
+    #[serde(default = "default_slice_end")]
+    pub slice_end: f32,
 }
 
 fn default_path_cut_end() -> f32 {
+    1.0
+}
+
+fn default_slice_end() -> f32 {
     1.0
 }
 

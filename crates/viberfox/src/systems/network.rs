@@ -398,6 +398,14 @@ fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
             path_cut_begin: p.path_cut_begin,
             path_cut_end: p.path_cut_end,
             hollow: p.hollow,
+            twist_begin: p.twist_begin,
+            twist_end: p.twist_end,
+            taper_x: p.taper_x,
+            taper_y: p.taper_y,
+            top_shear_x: p.top_shear_x,
+            top_shear_y: p.top_shear_y,
+            slice_begin: p.slice_begin,
+            slice_end: p.slice_end,
         },
         Transform::from_translation(p.position)
             .with_rotation(Quat::from_euler(

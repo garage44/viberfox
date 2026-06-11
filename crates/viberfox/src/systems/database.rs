@@ -118,6 +118,8 @@ pub fn load_prims(
              color_r, color_g, color_b, \
              texture_id, \
              path_cut_begin, path_cut_end, hollow, \
+             twist_begin, twist_end, taper_x, taper_y, \
+             top_shear_x, top_shear_y, slice_begin, slice_end, \
              created_at, updated_at \
              FROM prims ORDER BY created_at DESC",
         ) {
@@ -150,8 +152,16 @@ pub fn load_prims(
                 path_cut_begin: row.get::<_, Option<f64>>(17)?.map(|v| v as f32).unwrap_or(0.0),
                 path_cut_end: row.get::<_, Option<f64>>(18)?.map(|v| v as f32).unwrap_or(1.0),
                 hollow: row.get::<_, Option<f64>>(19)?.map(|v| v as f32).unwrap_or(0.0),
-                created_at: row.get(20)?,
-                updated_at: row.get(21)?,
+                twist_begin: row.get::<_, Option<f64>>(20)?.map(|v| v as f32).unwrap_or(0.0),
+                twist_end: row.get::<_, Option<f64>>(21)?.map(|v| v as f32).unwrap_or(0.0),
+                taper_x: row.get::<_, Option<f64>>(22)?.map(|v| v as f32).unwrap_or(0.0),
+                taper_y: row.get::<_, Option<f64>>(23)?.map(|v| v as f32).unwrap_or(0.0),
+                top_shear_x: row.get::<_, Option<f64>>(24)?.map(|v| v as f32).unwrap_or(0.0),
+                top_shear_y: row.get::<_, Option<f64>>(25)?.map(|v| v as f32).unwrap_or(0.0),
+                slice_begin: row.get::<_, Option<f64>>(26)?.map(|v| v as f32).unwrap_or(0.0),
+                slice_end: row.get::<_, Option<f64>>(27)?.map(|v| v as f32).unwrap_or(1.0),
+                created_at: row.get(28)?,
+                updated_at: row.get(29)?,
             })
         });
 
@@ -180,6 +190,14 @@ pub fn load_prims(
                         path_cut_begin: prim.path_cut_begin,
                         path_cut_end: prim.path_cut_end,
                         hollow: prim.hollow,
+                        twist_begin: prim.twist_begin,
+                        twist_end: prim.twist_end,
+                        taper_x: prim.taper_x,
+                        taper_y: prim.taper_y,
+                        top_shear_x: prim.top_shear_x,
+                        top_shear_y: prim.top_shear_y,
+                        slice_begin: prim.slice_begin,
+                        slice_end: prim.slice_end,
                     },
                     Transform::from_xyz(prim.position_x, prim.position_y, prim.position_z)
                         .with_rotation(Quat::from_euler(

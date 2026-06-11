@@ -92,6 +92,16 @@ pub struct PrimDto {
     /// Optional texture key from standard library (ADR-017).
     #[serde(default)]
     pub texture_id: Option<String>,
+    #[serde(default)]
+    pub path_cut_begin: f32,
+    #[serde(default = "default_path_cut_end")]
+    pub path_cut_end: f32,
+    #[serde(default)]
+    pub hollow: f32,
+}
+
+fn default_path_cut_end() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

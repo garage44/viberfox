@@ -119,6 +119,8 @@ fn main() {
             rendering::spawn_prims
                 .after(database::load_prims)
                 .after(network::apply_network_snapshot),
+            rendering::rebuild_prim_meshes
+                .after(rendering::spawn_prims),
             rendering::refresh_prim_textures
                 .after(rendering::spawn_prims)
                 .after(network::apply_network_snapshot),

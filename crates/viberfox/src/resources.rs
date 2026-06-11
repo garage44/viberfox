@@ -106,11 +106,12 @@ pub struct ContextMenuState {
 }
 
 /// Edit dialog state for prim properties
-#[derive(Resource, Default, Debug, Clone)]
+#[derive(Resource, Debug, Clone)]
 pub struct EditDialogState {
     pub visible: bool,
     pub is_new: bool,
     pub prim_id: Option<i64>,
+    pub active_tab: u8, // 0 = Object, 1 = Texture
     pub name: String,
     pub shape: String,
     pub position: [f32; 3],
@@ -119,6 +120,9 @@ pub struct EditDialogState {
     pub color: [f32; 3],
     pub texture_id: Option<String>,
     pub texture_picker_open: bool,
+    pub path_cut_begin: f32,
+    pub path_cut_end: f32,
+    pub hollow: f32,
     // Snapshot taken when the dialog opens; used to build a revert payload on Cancel.
     pub original_name: String,
     pub original_shape: String,
@@ -127,6 +131,41 @@ pub struct EditDialogState {
     pub original_scale: [f32; 3],
     pub original_color: [f32; 3],
     pub original_texture_id: Option<String>,
+    pub original_path_cut_begin: f32,
+    pub original_path_cut_end: f32,
+    pub original_hollow: f32,
+}
+
+impl Default for EditDialogState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            is_new: false,
+            prim_id: None,
+            active_tab: 0,
+            name: String::new(),
+            shape: String::new(),
+            position: [0.0; 3],
+            rotation: [0.0; 3],
+            scale: [0.0; 3],
+            color: [0.0; 3],
+            texture_id: None,
+            texture_picker_open: false,
+            path_cut_begin: 0.0,
+            path_cut_end: 1.0,
+            hollow: 0.0,
+            original_name: String::new(),
+            original_shape: String::new(),
+            original_position: [0.0; 3],
+            original_rotation: [0.0; 3],
+            original_scale: [0.0; 3],
+            original_color: [0.0; 3],
+            original_texture_id: None,
+            original_path_cut_begin: 0.0,
+            original_path_cut_end: 1.0,
+            original_hollow: 0.0,
+        }
+    }
 }
 
 #[derive(Resource)]

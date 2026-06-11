@@ -56,6 +56,19 @@ pub fn init_database(db_path: &str) -> Result<Connection> {
         "ALTER TABLE prims ADD COLUMN texture_id TEXT DEFAULT NULL",
         [],
     );
+    // Add path-cut / hollow columns (migration for existing databases).
+    let _ = conn.execute(
+        "ALTER TABLE prims ADD COLUMN path_cut_begin REAL NOT NULL DEFAULT 0.0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE prims ADD COLUMN path_cut_end REAL NOT NULL DEFAULT 1.0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE prims ADD COLUMN hollow REAL NOT NULL DEFAULT 0.0",
+        [],
+    );
 
     // Create index on region_id
     conn.execute(
@@ -134,6 +147,9 @@ pub struct PrimRow {
     pub color_g: f32,
     pub color_b: f32,
     pub texture_id: Option<String>,
+    pub path_cut_begin: f32,
+    pub path_cut_end: f32,
+    pub hollow: f32,
     pub created_at: String,
     pub updated_at: String,
 }

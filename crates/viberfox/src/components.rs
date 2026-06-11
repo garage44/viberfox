@@ -23,7 +23,17 @@ pub struct Prim {
     pub shape: PrimShape,
     pub color: Color,
     pub texture_id: Option<String>,
+    /// Fraction of the path to start at (0.0–1.0, default 0.0). Maps to angular sweep for cylinder/cone.
+    pub path_cut_begin: f32,
+    /// Fraction of the path to end at (0.0–1.0, default 1.0).
+    pub path_cut_end: f32,
+    /// Hollow ratio (0.0–0.95, default 0.0). Inner radius = outer * hollow.
+    pub hollow: f32,
 }
+
+/// Marker: prim's mesh needs to be rebuilt (shape/path-cut/hollow changed).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct NeedsMeshRebuild;
 
 /// Marker: prim's material needs its `base_color_texture` swapped from the cache.
 #[derive(Component, Debug, Clone, Copy)]

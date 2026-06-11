@@ -83,6 +83,9 @@ pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<Prim
                 scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
                 color: [row.get(13)?, row.get(14)?, row.get(15)?],
                 texture_id: row.get(16)?,
+                path_cut_begin: 0.0,
+                path_cut_end: 1.0,
+                hollow: 0.0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -230,6 +233,9 @@ fn select_prim_by_id(conn: &Connection, prim_id: i64) -> anyhow::Result<Option<P
                 scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
                 color: [row.get(13)?, row.get(14)?, row.get(15)?],
                 texture_id: row.get(16)?,
+                path_cut_begin: 0.0,
+                path_cut_end: 1.0,
+                hollow: 0.0,
             })
         })
         .optional()?;

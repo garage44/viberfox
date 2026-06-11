@@ -11,6 +11,9 @@ pub fn db_create_prim(
     scale: [f64; 3],
     color: [f64; 3],
     texture_id: Option<&str>,
+    path_cut_begin: f64,
+    path_cut_end: f64,
+    hollow: f64,
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO prims \
@@ -19,9 +22,10 @@ pub fn db_create_prim(
           rotation_x, rotation_y, rotation_z, \
           scale_x, scale_y, scale_z, \
           color_r, color_g, color_b, texture_id, \
+          path_cut_begin, path_cut_end, hollow, \
           created_at, updated_at) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,\
-                 datetime('now'),datetime('now'))",
+                 ?17,?18,?19,datetime('now'),datetime('now'))",
         rusqlite::params![
             region_id,
             name,
@@ -39,6 +43,9 @@ pub fn db_create_prim(
             color[1],
             color[2],
             texture_id,
+            path_cut_begin,
+            path_cut_end,
+            hollow,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -54,6 +61,9 @@ pub fn db_update_prim(
     scale: [f64; 3],
     color: [f64; 3],
     texture_id: Option<&str>,
+    path_cut_begin: f64,
+    path_cut_end: f64,
+    hollow: f64,
 ) -> Result<()> {
     conn.execute(
         "UPDATE prims SET name=?1, shape=?2, \
@@ -61,7 +71,8 @@ pub fn db_update_prim(
          rotation_x=?6, rotation_y=?7, rotation_z=?8, \
          scale_x=?9, scale_y=?10, scale_z=?11, \
          color_r=?12, color_g=?13, color_b=?14, texture_id=?15, \
-         updated_at=datetime('now') WHERE id=?16",
+         path_cut_begin=?16, path_cut_end=?17, hollow=?18, \
+         updated_at=datetime('now') WHERE id=?19",
         rusqlite::params![
             name,
             shape,
@@ -78,6 +89,9 @@ pub fn db_update_prim(
             color[1],
             color[2],
             texture_id,
+            path_cut_begin,
+            path_cut_end,
+            hollow,
             prim_id,
         ],
     )?;

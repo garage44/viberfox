@@ -116,7 +116,9 @@ pub fn load_prims(
              rotation_x, rotation_y, rotation_z, \
              scale_x, scale_y, scale_z, \
              color_r, color_g, color_b, \
-             texture_id, created_at, updated_at \
+             texture_id, \
+             path_cut_begin, path_cut_end, hollow, \
+             created_at, updated_at \
              FROM prims ORDER BY created_at DESC",
         ) {
             Ok(stmt) => stmt,
@@ -145,8 +147,11 @@ pub fn load_prims(
                 color_g: row.get(14)?,
                 color_b: row.get(15)?,
                 texture_id: row.get(16)?,
-                created_at: row.get(17)?,
-                updated_at: row.get(18)?,
+                path_cut_begin: row.get::<_, Option<f64>>(17)?.map(|v| v as f32).unwrap_or(0.0),
+                path_cut_end: row.get::<_, Option<f64>>(18)?.map(|v| v as f32).unwrap_or(1.0),
+                hollow: row.get::<_, Option<f64>>(19)?.map(|v| v as f32).unwrap_or(0.0),
+                created_at: row.get(20)?,
+                updated_at: row.get(21)?,
             })
         });
 
@@ -172,6 +177,9 @@ pub fn load_prims(
                         shape: PrimShape::from_str(&prim.shape),
                         color: Color::srgb(prim.color_r, prim.color_g, prim.color_b),
                         texture_id: prim.texture_id.clone(),
+                        path_cut_begin: prim.path_cut_begin,
+                        path_cut_end: prim.path_cut_end,
+                        hollow: prim.hollow,
                     },
                     Transform::from_xyz(prim.position_x, prim.position_y, prim.position_z)
                         .with_rotation(Quat::from_euler(

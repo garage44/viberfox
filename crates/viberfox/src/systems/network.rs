@@ -395,6 +395,9 @@ fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
             shape: PrimShape::from_str(&p.shape),
             color: Color::srgb(p.color[0], p.color[1], p.color[2]),
             texture_id: p.texture_id,
+            path_cut_begin: p.path_cut_begin,
+            path_cut_end: p.path_cut_end,
+            hollow: p.hollow,
         },
         Transform::from_translation(p.position)
             .with_rotation(Quat::from_euler(

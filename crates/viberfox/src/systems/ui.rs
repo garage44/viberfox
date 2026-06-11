@@ -3,7 +3,7 @@
 //! Renders context menus and edit dialogs using egui.
 
 use super::egui_manager::EguiManager;
-use crate::components::{Prim, PrimShape, Region, Selected};
+use crate::components::{NeedsMeshRebuild, Prim, PrimShape, Region, Selected};
 use crate::resources::{
     ContextMenuState, Database, EditDialogState, GameState, PrimTextureCache, TextureLibrary,
 };
@@ -62,8 +62,11 @@ pub fn render_context_menu(
                             edit_dialog.rotation = [rot.0, rot.1, rot.2];
                             let scale_v = transform.scale;
                             edit_dialog.scale = [scale_v.x, scale_v.y, scale_v.z];
-                            // Snapshot for Cancel revert.
                             edit_dialog.texture_id = prim.texture_id.clone();
+                            edit_dialog.path_cut_begin = prim.path_cut_begin;
+                            edit_dialog.path_cut_end = prim.path_cut_end;
+                            edit_dialog.hollow = prim.hollow;
+                            // Snapshot for Cancel revert.
                             edit_dialog.original_name = prim.name.clone();
                             edit_dialog.original_color = color;
                             edit_dialog.original_shape = shape;
@@ -71,6 +74,9 @@ pub fn render_context_menu(
                             edit_dialog.original_rotation = edit_dialog.rotation;
                             edit_dialog.original_scale = edit_dialog.scale;
                             edit_dialog.original_texture_id = prim.texture_id.clone();
+                            edit_dialog.original_path_cut_begin = prim.path_cut_begin;
+                            edit_dialog.original_path_cut_end = prim.path_cut_end;
+                            edit_dialog.original_hollow = prim.hollow;
                             edit_dialog.texture_picker_open = false;
                             edit_dialog.visible = true;
                             break;
@@ -94,6 +100,9 @@ pub fn render_context_menu(
                     edit_dialog.shape = "box".to_string();
                     edit_dialog.texture_id = None;
                     edit_dialog.texture_picker_open = false;
+                    edit_dialog.path_cut_begin = 0.0;
+                    edit_dialog.path_cut_end = 1.0;
+                    edit_dialog.hollow = 0.0;
                     let hit = context_menu.hit_point;
                     // Offset Y so the prim rests on the surface instead of being centred in it.
                     edit_dialog.position = [hit.x, hit.y + 0.5, hit.z];
@@ -137,117 +146,216 @@ pub fn render_edit_dialog(
 
     Window::new(title)
         .open(&mut dialog_open)
-        .default_width(300.0)
+        .default_width(320.0)
         .show(ctx, |ui| {
-            // Prim name field
-            ui.label("Name:");
-            ui.text_edit_singleline(&mut edit_dialog.name);
-
+            // Tab bar
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut edit_dialog.active_tab, 0, "Object");
+                ui.selectable_value(&mut edit_dialog.active_tab, 1, "Texture");
+            });
             ui.separator();
 
-            // Shape selector
-            ui.label("Shape:");
-            let shapes = vec!["box", "sphere", "cylinder", "cone"];
+            match edit_dialog.active_tab {
+                // ── Object tab ──────────────────────────────────────────────
+                0 => {
+                    egui::Grid::new("object_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut edit_dialog.name);
+                            ui.end_row();
 
-            egui::ComboBox::from_label("")
-                .selected_text(&edit_dialog.shape)
-                .show_ui(ui, |ui| {
-                    for shape in shapes {
-                        ui.selectable_value(&mut edit_dialog.shape, shape.to_string(), shape);
+                            ui.label("Building Block Type");
+                            egui::ComboBox::from_id_salt("shape_combo")
+                                .selected_text(shape_display_name(&edit_dialog.shape))
+                                .show_ui(ui, |ui| {
+                                    for (key, label) in SHAPES {
+                                        ui.selectable_value(
+                                            &mut edit_dialog.shape,
+                                            key.to_string(),
+                                            *label,
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+                        });
+
+                    ui.separator();
+
+                    // Position / Size / Rotation
+                    egui::Grid::new("transform_grid")
+                        .num_columns(4)
+                        .spacing([4.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Position (meters)");
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.position[0])
+                                    .prefix("X ")
+                                    .speed(0.1),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.position[1])
+                                    .prefix("Y ")
+                                    .speed(0.1),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.position[2])
+                                    .prefix("Z ")
+                                    .speed(0.1),
+                            );
+                            ui.end_row();
+
+                            ui.label("Size (meters)");
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.scale[0])
+                                    .prefix("X ")
+                                    .speed(0.1)
+                                    .range(0.001..=f32::MAX),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.scale[1])
+                                    .prefix("Y ")
+                                    .speed(0.1)
+                                    .range(0.001..=f32::MAX),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.scale[2])
+                                    .prefix("Z ")
+                                    .speed(0.1)
+                                    .range(0.001..=f32::MAX),
+                            );
+                            ui.end_row();
+
+                            ui.label("Rotation (degrees)");
+                            let mut rot_x = edit_dialog.rotation[0].to_degrees();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut rot_x)
+                                        .prefix("X ")
+                                        .speed(1.0)
+                                        .suffix("°"),
+                                )
+                                .changed()
+                            {
+                                edit_dialog.rotation[0] = rot_x.to_radians();
+                            }
+                            let mut rot_y = edit_dialog.rotation[1].to_degrees();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut rot_y)
+                                        .prefix("Y ")
+                                        .speed(1.0)
+                                        .suffix("°"),
+                                )
+                                .changed()
+                            {
+                                edit_dialog.rotation[1] = rot_y.to_radians();
+                            }
+                            let mut rot_z = edit_dialog.rotation[2].to_degrees();
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut rot_z)
+                                        .prefix("Z ")
+                                        .speed(1.0)
+                                        .suffix("°"),
+                                )
+                                .changed()
+                            {
+                                edit_dialog.rotation[2] = rot_z.to_radians();
+                            }
+                            ui.end_row();
+                        });
+
+                    ui.separator();
+
+                    // Path Cut Begin and End
+                    ui.label("Path Cut Begin and End");
+                    ui.horizontal(|ui| {
+                        let pce = edit_dialog.path_cut_end;
+                        let pcb = edit_dialog.path_cut_begin;
+                        ui.label("B");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.path_cut_begin)
+                                .speed(0.005)
+                                .range(0.0..=pce)
+                                .min_decimals(3)
+                                .max_decimals(3),
+                        );
+                        ui.label("E");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.path_cut_end)
+                                .speed(0.005)
+                                .range(pcb..=1.0)
+                                .min_decimals(3)
+                                .max_decimals(3),
+                        );
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Hollow (stored 0–0.95, displayed 0–95)
+                    ui.label("Hollow");
+                    let mut hollow_pct = edit_dialog.hollow * 100.0;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut hollow_pct)
+                                .speed(0.5)
+                                .range(0.0..=95.0)
+                                .min_decimals(1)
+                                .max_decimals(1),
+                        )
+                        .changed()
+                    {
+                        edit_dialog.hollow = hollow_pct / 100.0;
                     }
-                });
-
-            ui.separator();
-
-            // Position fields (Bevy is Y-up: Y is vertical, X/Z are the ground plane)
-            ui.label("Position:");
-            ui.horizontal(|ui| {
-                ui.label("X:");
-                ui.add(egui::DragValue::new(&mut edit_dialog.position[0]).speed(0.1));
-                ui.label("Y (up):");
-                ui.add(egui::DragValue::new(&mut edit_dialog.position[1]).speed(0.1));
-                ui.label("Z:");
-                ui.add(egui::DragValue::new(&mut edit_dialog.position[2]).speed(0.1));
-            });
-
-            // Rotation fields
-            ui.label("Rotation (degrees):");
-            ui.horizontal(|ui| {
-                ui.label("X:");
-                let mut rot_x = edit_dialog.rotation[0].to_degrees();
-                if ui
-                    .add(egui::DragValue::new(&mut rot_x).speed(1.0))
-                    .changed()
-                {
-                    edit_dialog.rotation[0] = rot_x.to_radians();
                 }
-                ui.label("Y:");
-                let mut rot_y = edit_dialog.rotation[1].to_degrees();
-                if ui
-                    .add(egui::DragValue::new(&mut rot_y).speed(1.0))
-                    .changed()
-                {
-                    edit_dialog.rotation[1] = rot_y.to_radians();
+                // ── Texture tab ─────────────────────────────────────────────
+                _ => {
+                    egui::Grid::new("texture_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label("Color");
+                            let mut srgb = [
+                                (edit_dialog.color[0] * 255.0) as u8,
+                                (edit_dialog.color[1] * 255.0) as u8,
+                                (edit_dialog.color[2] * 255.0) as u8,
+                            ];
+                            if ui.color_edit_button_srgb(&mut srgb).changed() {
+                                edit_dialog.color = [
+                                    srgb[0] as f32 / 255.0,
+                                    srgb[1] as f32 / 255.0,
+                                    srgb[2] as f32 / 255.0,
+                                ];
+                            }
+                            ui.end_row();
+
+                            ui.label("Texture");
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    edit_dialog.texture_id.as_deref().unwrap_or("None"),
+                                );
+                                if !texture_lib.entries.is_empty()
+                                    && ui.button("Pick…").clicked()
+                                {
+                                    edit_dialog.texture_picker_open =
+                                        !edit_dialog.texture_picker_open;
+                                }
+                                if edit_dialog.texture_id.is_some()
+                                    && ui.button("Clear").clicked()
+                                {
+                                    edit_dialog.texture_id = None;
+                                }
+                            });
+                            ui.end_row();
+                        });
                 }
-                ui.label("Z:");
-                let mut rot_z = edit_dialog.rotation[2].to_degrees();
-                if ui
-                    .add(egui::DragValue::new(&mut rot_z).speed(1.0))
-                    .changed()
-                {
-                    edit_dialog.rotation[2] = rot_z.to_radians();
-                }
-            });
-
-            // Scale fields
-            ui.label("Scale:");
-            ui.horizontal(|ui| {
-                ui.label("X:");
-                ui.add(egui::DragValue::new(&mut edit_dialog.scale[0]).speed(0.1));
-                ui.label("Y:");
-                ui.add(egui::DragValue::new(&mut edit_dialog.scale[1]).speed(0.1));
-                ui.label("Z:");
-                ui.add(egui::DragValue::new(&mut edit_dialog.scale[2]).speed(0.1));
-            });
-
-            ui.separator();
-
-            // Color picker
-            ui.label("Color:");
-            let mut srgb = [
-                (edit_dialog.color[0] * 255.0) as u8,
-                (edit_dialog.color[1] * 255.0) as u8,
-                (edit_dialog.color[2] * 255.0) as u8,
-            ];
-            if ui.color_edit_button_srgb(&mut srgb).changed() {
-                edit_dialog.color = [
-                    srgb[0] as f32 / 255.0,
-                    srgb[1] as f32 / 255.0,
-                    srgb[2] as f32 / 255.0,
-                ];
             }
 
             ui.separator();
 
-            // Texture picker
-            ui.label("Texture:");
-            ui.horizontal(|ui| {
-                let tex_label = edit_dialog
-                    .texture_id
-                    .as_deref()
-                    .unwrap_or("None");
-                ui.label(tex_label);
-                if !texture_lib.entries.is_empty() && ui.button("Pick…").clicked() {
-                    edit_dialog.texture_picker_open = !edit_dialog.texture_picker_open;
-                }
-                if edit_dialog.texture_id.is_some() && ui.button("Clear").clicked() {
-                    edit_dialog.texture_id = None;
-                }
-            });
-
-            ui.separator();
-
-            // Dialog buttons
+            // Dialog buttons — always visible regardless of active tab
             ui.horizontal(|ui| {
                 if ui.button("Save (S)").clicked() {
                     game_state.pending_prim_save = Some(edit_dialog.clone());
@@ -362,9 +470,11 @@ pub fn render_edit_dialog(
 /// Sync dialog values → prim entity every frame while the edit dialog is open.
 /// This gives live preview; Save persists to DB, Cancel reverts via `pending_prim_revert`.
 pub fn apply_live_prim_edits(
+    mut commands: Commands,
     edit_dialog: Res<EditDialogState>,
     game_state: Res<GameState>,
     mut prim_query: Query<(
+        Entity,
         &mut Prim,
         &mut Transform,
         Option<&MeshMaterial3d<StandardMaterial>>,
@@ -377,7 +487,7 @@ pub fn apply_live_prim_edits(
     let Some(prim_id) = game_state.editing_prim_id else {
         return;
     };
-    for (mut prim, mut transform, mat_handle) in prim_query.iter_mut() {
+    for (entity, mut prim, mut transform, mat_handle) in prim_query.iter_mut() {
         if prim.id != prim_id {
             continue;
         }
@@ -401,6 +511,22 @@ pub fn apply_live_prim_edits(
             Color::srgb(edit_dialog.color[0], edit_dialog.color[1], edit_dialog.color[2]);
         prim.color = new_color;
         prim.name = edit_dialog.name.clone();
+
+        // Detect geometry changes and request a mesh rebuild.
+        let new_shape = PrimShape::from_str(&edit_dialog.shape);
+        let geom_changed = new_shape != prim.shape
+            || (edit_dialog.path_cut_begin - prim.path_cut_begin).abs() > 0.001
+            || (edit_dialog.path_cut_end - prim.path_cut_end).abs() > 0.001
+            || (edit_dialog.hollow - prim.hollow).abs() > 0.001;
+
+        if geom_changed {
+            prim.shape = new_shape;
+            prim.path_cut_begin = edit_dialog.path_cut_begin;
+            prim.path_cut_end = edit_dialog.path_cut_end;
+            prim.hollow = edit_dialog.hollow;
+            commands.entity(entity).insert(NeedsMeshRebuild);
+        }
+
         // Update material directly — Selected doesn't change during editing so
         // highlight_selected_prim won't fire on its own.
         if let Some(handle) = mat_handle {
@@ -430,6 +556,9 @@ fn push_revert(game_state: &mut GameState, dialog: &EditDialogState) {
             scale: dialog.original_scale,
             color: dialog.original_color,
             original_texture_id: dialog.original_texture_id.clone(),
+            path_cut_begin: dialog.original_path_cut_begin,
+            path_cut_end: dialog.original_path_cut_end,
+            hollow: dialog.original_hollow,
             ..Default::default()
         });
     }
@@ -480,6 +609,9 @@ pub fn send_prim_mutations(
                         dialog_state.color[2] as f64,
                     ],
                     tex,
+                    dialog_state.path_cut_begin as f64,
+                    dialog_state.path_cut_end as f64,
+                    dialog_state.hollow as f64,
                 )
                 .ok()
             });
@@ -497,6 +629,9 @@ pub fn send_prim_mutations(
                             dialog_state.color[2],
                         ),
                         texture_id: dialog_state.texture_id.clone(),
+                        path_cut_begin: dialog_state.path_cut_begin,
+                        path_cut_end: dialog_state.path_cut_end,
+                        hollow: dialog_state.hollow,
                     },
                     Transform::from_xyz(
                         dialog_state.position[0],
@@ -549,11 +684,19 @@ pub fn send_prim_mutations(
                         dialog_state.color[2] as f64,
                     ],
                     tex,
+                    dialog_state.path_cut_begin as f64,
+                    dialog_state.path_cut_end as f64,
+                    dialog_state.hollow as f64,
                 );
             }
             for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
                 if prim.id == prim_id {
                     let texture_changed = prim.texture_id != dialog_state.texture_id;
+                    let geom_changed = prim.shape != PrimShape::from_str(&dialog_state.shape)
+                        || (prim.path_cut_begin - dialog_state.path_cut_begin).abs() > 0.0001
+                        || (prim.path_cut_end - dialog_state.path_cut_end).abs() > 0.0001
+                        || (prim.hollow - dialog_state.hollow).abs() > 0.0001;
+
                     prim.name = dialog_state.name.clone();
                     prim.shape = PrimShape::from_str(&dialog_state.shape);
                     prim.color = Color::srgb(
@@ -562,6 +705,9 @@ pub fn send_prim_mutations(
                         dialog_state.color[2],
                     );
                     prim.texture_id = dialog_state.texture_id.clone();
+                    prim.path_cut_begin = dialog_state.path_cut_begin;
+                    prim.path_cut_end = dialog_state.path_cut_end;
+                    prim.hollow = dialog_state.hollow;
                     *transform = Transform::from_xyz(
                         dialog_state.position[0],
                         dialog_state.position[1],
@@ -586,6 +732,9 @@ pub fn send_prim_mutations(
                             dialog_state.texture_id.as_deref(),
                         );
                     }
+                    if geom_changed {
+                        commands.entity(entity).insert(NeedsMeshRebuild);
+                    }
                     commands.entity(entity).insert(Selected);
                     game_state.selected_prim_id = Some(prim_id);
                     tracing::info!(id = prim_id, "updated prim");
@@ -600,10 +749,18 @@ pub fn send_prim_mutations(
             for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
                 if prim.id == prim_id {
                     let texture_changed = prim.texture_id != revert.original_texture_id;
+                    let geom_changed = prim.shape != PrimShape::from_str(&revert.shape)
+                        || (prim.path_cut_begin - revert.path_cut_begin).abs() > 0.0001
+                        || (prim.path_cut_end - revert.path_cut_end).abs() > 0.0001
+                        || (prim.hollow - revert.hollow).abs() > 0.0001;
+
                     prim.name = revert.name.clone();
                     prim.shape = PrimShape::from_str(&revert.shape);
                     prim.color = Color::srgb(revert.color[0], revert.color[1], revert.color[2]);
                     prim.texture_id = revert.original_texture_id.clone();
+                    prim.path_cut_begin = revert.path_cut_begin;
+                    prim.path_cut_end = revert.path_cut_end;
+                    prim.hollow = revert.hollow;
                     *transform = Transform::from_xyz(
                         revert.position[0],
                         revert.position[1],
@@ -623,6 +780,9 @@ pub fn send_prim_mutations(
                             &texture_cache,
                             revert.original_texture_id.as_deref(),
                         );
+                    }
+                    if geom_changed {
+                        commands.entity(entity).insert(NeedsMeshRebuild);
                     }
                     commands.entity(entity).insert(Selected);
                     game_state.selected_prim_id = Some(prim_id);
@@ -664,4 +824,23 @@ fn apply_texture_to_material(
         .and_then(|id| cache.handles.get(id))
         .cloned()
         .map(|h| h.into());
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const SHAPES: &[(&str, &str)] = &[
+    ("box", "Box"),
+    ("sphere", "Sphere"),
+    ("cylinder", "Cylinder"),
+    ("cone", "Cone"),
+];
+
+fn shape_display_name(key: &str) -> &str {
+    SHAPES
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, label)| *label)
+        .unwrap_or(key)
 }

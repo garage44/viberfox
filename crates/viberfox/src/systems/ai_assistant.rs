@@ -485,6 +485,9 @@ fn run_tool(
                     [scale.x as f64, scale.y as f64, scale.z as f64],
                     [color[0] as f64, color[1] as f64, color[2] as f64],
                     texture_id.as_deref(),
+                    0.0,
+                    1.0,
+                    0.0,
                 )
                 .ok()
             });
@@ -499,6 +502,9 @@ fn run_tool(
                             shape: PrimShape::from_str(&shape_str),
                             color: Color::srgb(color[0], color[1], color[2]),
                             texture_id: texture_id.clone(),
+                            path_cut_begin: 0.0,
+                            path_cut_end: 1.0,
+                            hollow: 0.0,
                         },
                         Transform::from_xyz(pos.x, pos.y, pos.z)
                             .with_scale(Vec3::new(scale.x, scale.y, scale.z)),
@@ -517,7 +523,7 @@ fn run_tool(
 
             // Find current values to merge with partial updates
             let existing = prim_query.iter().find(|(_, p, _)| p.id == prim_id);
-            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color) = match existing {
+            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color, cur_pcb, cur_pce, cur_hollow) = match existing {
                 Some((_, p, t)) => {
                     let lin = p.color.to_linear();
                     (
@@ -526,6 +532,9 @@ fn run_tool(
                         t.translation,
                         t.scale,
                         [lin.red, lin.green, lin.blue],
+                        p.path_cut_begin,
+                        p.path_cut_end,
+                        p.hollow,
                     )
                 }
                 None => return format!("Error: prim {} not found", prim_id),
@@ -570,6 +579,9 @@ fn run_tool(
                     [new_scale.x as f64, new_scale.y as f64, new_scale.z as f64],
                     [new_color[0] as f64, new_color[1] as f64, new_color[2] as f64],
                     new_texture_id.as_deref(),
+                    cur_pcb as f64,
+                    cur_pce as f64,
+                    cur_hollow as f64,
                 );
             }
 
@@ -586,6 +598,9 @@ fn run_tool(
                         shape: PrimShape::from_str(&new_shape),
                         color: Color::srgb(new_color[0], new_color[1], new_color[2]),
                         texture_id: new_texture_id,
+                        path_cut_begin: cur_pcb,
+                        path_cut_end: cur_pce,
+                        hollow: cur_hollow,
                     },
                     Transform::from_xyz(new_pos.x, new_pos.y, new_pos.z)
                         .with_scale(Vec3::new(new_scale.x, new_scale.y, new_scale.z)),

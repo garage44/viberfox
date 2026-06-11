@@ -1,24 +1,105 @@
 use super::egui_manager::EguiManager;
 use super::prim_ops;
-use crate::components::{Prim, PrimShape, Region};
+use crate::components::{NeedsMeshRebuild, Prim, PrimShape, Region};
 use crate::resources::{AiAssistantState, AiConfig, Database, DisplayMessage, PendingAiResponse};
 use bevy::prelude::*;
 use std::sync::{Arc, Mutex};
 
-const SYSTEM_PROMPT: &str = "\
-You are an AI assistant embedded in Viberfox, a 3D world editor. \
-You can create, update, and delete 3D primitives (prims) using tools.\n\
-\n\
-Coordinate system: Y is up. To rest an object on the ground plane, set position.y to half its \
-scale.y (e.g. a box with scale.y=4 should have position.y=2). \
-Colors are in [0.0, 1.0] range per channel (r, g, b). \
-Available shapes: box, sphere, cylinder, cone, torus.\n\
-\n\
-For city buildings: tall thin boxes (scale ~[3,8,3]) for towers, wide low boxes for podiums, \
-cylinders for pillars. Vary heights, widths, and colors for visual interest. \
-Spread buildings along the X or Z axis with ~5-unit spacing.";
+const SYSTEM_PROMPT: &str = r#"You are the in-world building assistant for Viberfox, a 3D world editor. You construct
+scenes by composing primitives ("prims") with the create_prim, update_prim, delete_prim,
+and list_prims tools. Your goal is believable, well-proportioned architecture assembled
+from many parts — never a single bare box.
+
+GEOMETRY
+- Right-handed coordinates, Y is up, units are meters.
+- A prim's `position` is its CENTER. `scale` is its full size along each axis
+  (x = width, y = height, z = depth).
+- Rest a prim on the ground (the y=0 plane): position.y = scale.y / 2.
+- Stack prim B on top of prim A: B.position.y = (A.position.y + A.scale.y/2) + B.scale.y/2.
+- Colors are r,g,b in [0.0, 1.0]. `texture_id` is a catalog filename stem
+  (e.g. "concrete-01"); omit it for a flat color.
+
+SHAPES AND THEIR ARCHITECTURAL ROLES
+- box: walls, floor slabs, massing blocks, podiums, cornices, mullions, parapets, steps.
+- cylinder: columns, round towers, chimneys, silos, the drum under a dome.
+- cone: spires, pointed or conical roofs, finials, turret caps.
+- sphere: domes and orbs (flatten it, scale.y < scale.x/scale.z, for a shallow dome).
+- torus: rings, balcony rails, decorative bands.
+
+SHAPE MODIFIERS (the optional `geometry` field on create_prim/update_prim)
+These reshape a single prim along its height (path) or cross-section (profile) so
+you can build forms a plain box cannot. Use them deliberately; leave them at default
+for ordinary masses.
+- taper (taper_x / taper_y, -1..1): shrink the top (+) or bottom (-). Turn a box into
+  a pyramid or wedge, a cylinder into a cone, or batter a tower's walls slightly
+  (e.g. taper 0.1) for a solid, grounded look. Great for spires, obelisks, ziggurats.
+- slice (slice_begin / slice_end, 0..1): trim the prim along its height. Slice a sphere
+  from the bottom for a dome or cupola; take a band out of a cylinder.
+- path_cut (path_cut_begin / path_cut_end, 0..1): cut an angular wedge through the
+  vertical axis. Make a quarter/half cylinder for a corner tower, or an open arcade.
+- hollow (0..0.95): turn a prim into a shell or tube — chimney flues, wells, ring walls,
+  archways (a hollowed, path-cut cylinder), window/door reveals.
+- twist (twist_begin / twist_end, degrees): rotate the profile up the height for a
+  spiral or twisted-tower motif. Use sparingly.
+- top_shear (top_shear_x / top_shear_y, -0.5..0.5): lean a mass sideways for a buttress,
+  a flying form, or a parallelogram.
+Modifiers compose (e.g. a tapered + sliced sphere = a ribbed dome segment), and they
+respect the prim's position/scale, so a tapered box still rests on the ground.
+
+MAKING A BUILDING LOOK GOOD
+1. Massing first. Build every structure from several prims. Favor a tripartite scheme:
+   a wider base/podium, a taller shaft/body, and a distinct cap or roof. Step the
+   building back as it rises.
+2. Human proportion. A floor is ~3m tall, doors ~2-2.5m, windows ~1.5m. Size masses in
+   whole-floor multiples and vary width, depth, and height — avoid perfect cubes.
+3. Align, never float. Every prim must rest on the ground or sit flush on another prim.
+   Stacked pieces should share a face; let trim overlap its host by ~0.05m so no seam
+   shows. Avoid deep intersections, gaps, and hovering pieces.
+4. Layer detail. After the main masses, add thin boxes for a plinth at the base, string
+   courses/cornices between floors, a roof slab or parapet on top, and pilasters or
+   columns for vertical rhythm. Small repeated details sell the scale.
+5. Rhythm and symmetry. Repeat columns, windows, and bays at a constant spacing, and
+   keep the building symmetric about its main axis unless asked otherwise.
+6. Cohesive palette. Choose 2-3 colors: a darker base, a mid-tone body, a lighter trim,
+   with roofs darker or accented. Put textures on large wall surfaces. Stay restrained.
+
+ROOFS
+- Flat/modern: a thin roof slab plus a low parapet box around the edge.
+- Pitched: a cone over a round tower, or two boxes leaned into a gable over a square plan.
+- Domed: a flattened sphere set on a short cylindrical drum.
+
+WORKFLOW
+- Plan the prim list and their stacked Y positions before creating anything; do the
+  arithmetic so parts meet exactly.
+- Call list_prims first to see what exists, avoid collisions, and build near the existing
+  geometry's coordinates rather than at a random origin.
+- For several buildings, space them apart by more than their footprint (leave streets)
+  and vary height, width, and color so they read as distinct.
+- Build one structure's prims, then stop and briefly describe what you made.
+
+Quality bar: a lone box, a floating piece, a uniform grid of identical cubes, or a
+clashing palette is a failure — revise before finishing."#;
 
 fn tools_schema() -> serde_json::Value {
+    // Optional procedural shape modifiers, shared by create_prim and update_prim.
+    // Every field defaults to a no-op, so a flat box/sphere/etc. is unaffected.
+    let geometry = serde_json::json!({
+        "type": "object",
+        "description": "Optional procedural shape modifiers; omit any field to leave it at its no-op default. The path runs bottom→top along the prim's local Y (height); the profile is its cross-section.",
+        "properties": {
+            "path_cut_begin": {"type": "number", "description": "0..1, start of an angular wedge cut around the vertical axis (begin < end). Box→wedge, cylinder→pie slice. Default 0."},
+            "path_cut_end": {"type": "number", "description": "0..1, end of the angular cut. Default 1 (no cut)."},
+            "hollow": {"type": "number", "description": "0..0.95, hollows the prim into a tube/shell (inner size = outer × hollow). Default 0."},
+            "twist_begin": {"type": "number", "description": "Degrees, -360..360. Rotation of the cross-section at the bottom. Default 0."},
+            "twist_end": {"type": "number", "description": "Degrees, -360..360. Rotation of the cross-section at the top; differ from twist_begin to spiral. Default 0."},
+            "taper_x": {"type": "number", "description": "-1..1. +x shrinks the top in width, -x shrinks the bottom. +1 tapers the top to nothing (box→pyramid/wedge, cylinder→cone). Default 0."},
+            "taper_y": {"type": "number", "description": "-1..1, taper along depth (Z). Default 0."},
+            "top_shear_x": {"type": "number", "description": "-0.5..0.5, slides the top sideways in X relative to the bottom (a lean/parallelogram). Default 0."},
+            "top_shear_y": {"type": "number", "description": "-0.5..0.5, top shear along depth (Z). Default 0."},
+            "slice_begin": {"type": "number", "description": "0..1, trims the prim along its height/path, keeping [begin, end] (begin < end). A sphere sliced from the bottom becomes a dome. Default 0."},
+            "slice_end": {"type": "number", "description": "0..1, end of the slice. Default 1 (no trim)."}
+        }
+    });
     serde_json::json!([
         {
             "name": "list_prims",
@@ -45,6 +126,7 @@ fn tools_schema() -> serde_json::Value {
                     },
                     "scale": {
                         "type": "object",
+                        "description": "Full size in meters (x=width, y=height, z=depth); the prim is centered on position.",
                         "required": ["x", "y", "z"],
                         "properties": {
                             "x": {"type": "number"},
@@ -64,7 +146,8 @@ fn tools_schema() -> serde_json::Value {
                     "texture_id": {
                         "type": "string",
                         "description": "Optional texture id (filename stem, e.g. 'brick'). Omit for solid color."
-                    }
+                    },
+                    "geometry": geometry.clone()
                 }
             }
         },
@@ -105,7 +188,8 @@ fn tools_schema() -> serde_json::Value {
                     "texture_id": {
                         "type": "string",
                         "description": "Optional texture id (filename stem, e.g. 'brick'). Set to null to clear."
-                    }
+                    },
+                    "geometry": geometry.clone()
                 }
             }
         },
@@ -472,6 +556,7 @@ fn run_tool(
             let color = color_from(input);
             let texture_id = input["texture_id"].as_str().map(|s| s.to_string());
             let region_id = region_query.iter().next().map(|r| r.id).unwrap_or(1);
+            let geom = PrimGeom::defaults().merged_with(input);
 
             let new_id = db.as_ref().and_then(|db| {
                 let conn = db.conn.lock().unwrap();
@@ -485,10 +570,10 @@ fn run_tool(
                     [scale.x as f64, scale.y as f64, scale.z as f64],
                     [color[0] as f64, color[1] as f64, color[2] as f64],
                     texture_id.as_deref(),
-                    0.0,
-                    1.0,
-                    0.0,
-                    prim_ops::WarpParams::default(),
+                    geom.path_cut_begin as f64,
+                    geom.path_cut_end as f64,
+                    geom.hollow as f64,
+                    geom.warp(),
                 )
                 .ok()
             });
@@ -496,25 +581,14 @@ fn run_tool(
             match new_id {
                 Some(id) => {
                     commands.spawn((
-                        Prim {
+                        geom.into_prim(
                             id,
                             region_id,
-                            name: prim_name.clone(),
-                            shape: PrimShape::from_str(&shape_str),
-                            color: Color::srgb(color[0], color[1], color[2]),
-                            texture_id: texture_id.clone(),
-                            path_cut_begin: 0.0,
-                            path_cut_end: 1.0,
-                            hollow: 0.0,
-                            twist_begin: 0.0,
-                            twist_end: 0.0,
-                            taper_x: 0.0,
-                            taper_y: 0.0,
-                            top_shear_x: 0.0,
-                            top_shear_y: 0.0,
-                            slice_begin: 0.0,
-                            slice_end: 1.0,
-                        },
+                            prim_name.clone(),
+                            &shape_str,
+                            color,
+                            texture_id.clone(),
+                        ),
                         Transform::from_xyz(pos.x, pos.y, pos.z)
                             .with_scale(Vec3::new(scale.x, scale.y, scale.z)),
                     ));
@@ -532,7 +606,7 @@ fn run_tool(
 
             // Find current values to merge with partial updates
             let existing = prim_query.iter().find(|(_, p, _)| p.id == prim_id);
-            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color, cur_pcb, cur_pce, cur_hollow, cur_warp) = match existing {
+            let (cur_name, cur_shape, cur_pos, cur_scale, cur_color, cur_geom) = match existing {
                 Some((_, p, t)) => {
                     let lin = p.color.to_linear();
                     (
@@ -541,23 +615,12 @@ fn run_tool(
                         t.translation,
                         t.scale,
                         [lin.red, lin.green, lin.blue],
-                        p.path_cut_begin,
-                        p.path_cut_end,
-                        p.hollow,
-                        prim_ops::WarpParams {
-                            twist_begin: p.twist_begin as f64,
-                            twist_end: p.twist_end as f64,
-                            taper_x: p.taper_x as f64,
-                            taper_y: p.taper_y as f64,
-                            top_shear_x: p.top_shear_x as f64,
-                            top_shear_y: p.top_shear_y as f64,
-                            slice_begin: p.slice_begin as f64,
-                            slice_end: p.slice_end as f64,
-                        },
+                        PrimGeom::from_prim(p),
                     )
                 }
                 None => return format!("Error: prim {} not found", prim_id),
             };
+            let new_geom = cur_geom.merged_with(input);
 
             let new_name = input["name"].as_str().unwrap_or(&cur_name).to_string();
             let new_shape = input["shape"].as_str().unwrap_or(&cur_shape).to_string();
@@ -598,10 +661,10 @@ fn run_tool(
                     [new_scale.x as f64, new_scale.y as f64, new_scale.z as f64],
                     [new_color[0] as f64, new_color[1] as f64, new_color[2] as f64],
                     new_texture_id.as_deref(),
-                    cur_pcb as f64,
-                    cur_pce as f64,
-                    cur_hollow as f64,
-                    cur_warp,
+                    new_geom.path_cut_begin as f64,
+                    new_geom.path_cut_end as f64,
+                    new_geom.hollow as f64,
+                    new_geom.warp(),
                 );
             }
 
@@ -611,28 +674,21 @@ fn run_tool(
             {
                 let region_id = existing_prim.region_id;
                 commands.entity(entity).insert((
-                    Prim {
-                        id: prim_id,
+                    new_geom.into_prim(
+                        prim_id,
                         region_id,
-                        name: new_name.clone(),
-                        shape: PrimShape::from_str(&new_shape),
-                        color: Color::srgb(new_color[0], new_color[1], new_color[2]),
-                        texture_id: new_texture_id,
-                        path_cut_begin: cur_pcb,
-                        path_cut_end: cur_pce,
-                        hollow: cur_hollow,
-                        twist_begin: cur_warp.twist_begin as f32,
-                        twist_end: cur_warp.twist_end as f32,
-                        taper_x: cur_warp.taper_x as f32,
-                        taper_y: cur_warp.taper_y as f32,
-                        top_shear_x: cur_warp.top_shear_x as f32,
-                        top_shear_y: cur_warp.top_shear_y as f32,
-                        slice_begin: cur_warp.slice_begin as f32,
-                        slice_end: cur_warp.slice_end as f32,
-                    },
+                        new_name.clone(),
+                        &new_shape,
+                        new_color,
+                        new_texture_id,
+                    ),
                     Transform::from_xyz(new_pos.x, new_pos.y, new_pos.z)
                         .with_scale(Vec3::new(new_scale.x, new_scale.y, new_scale.z)),
                 ));
+                // Rebuild the mesh when shape or procedural geometry changed.
+                if input.get("shape").is_some() || input.get("geometry").is_some() {
+                    commands.entity(entity).insert(NeedsMeshRebuild);
+                }
             }
 
             format!("Updated prim {}", prim_id)
@@ -683,4 +739,114 @@ fn color_from(v: &serde_json::Value) -> [f32; 3] {
         obj["g"].as_f64().unwrap_or(0.5) as f32,
         obj["b"].as_f64().unwrap_or(0.5) as f32,
     ]
+}
+
+/// Full procedural-geometry state (path cut, hollow, twist, taper, top shear,
+/// slice) shared by create/update. Lets a tool call merge only the fields it
+/// supplies over a base (defaults for create, the current prim for update).
+#[derive(Clone, Copy)]
+struct PrimGeom {
+    path_cut_begin: f32,
+    path_cut_end: f32,
+    hollow: f32,
+    twist_begin: f32,
+    twist_end: f32,
+    taper_x: f32,
+    taper_y: f32,
+    top_shear_x: f32,
+    top_shear_y: f32,
+    slice_begin: f32,
+    slice_end: f32,
+}
+
+impl PrimGeom {
+    fn defaults() -> Self {
+        Self {
+            path_cut_begin: 0.0,
+            path_cut_end: 1.0,
+            hollow: 0.0,
+            twist_begin: 0.0,
+            twist_end: 0.0,
+            taper_x: 0.0,
+            taper_y: 0.0,
+            top_shear_x: 0.0,
+            top_shear_y: 0.0,
+            slice_begin: 0.0,
+            slice_end: 1.0,
+        }
+    }
+
+    fn from_prim(p: &Prim) -> Self {
+        Self {
+            path_cut_begin: p.path_cut_begin,
+            path_cut_end: p.path_cut_end,
+            hollow: p.hollow,
+            twist_begin: p.twist_begin,
+            twist_end: p.twist_end,
+            taper_x: p.taper_x,
+            taper_y: p.taper_y,
+            top_shear_x: p.top_shear_x,
+            top_shear_y: p.top_shear_y,
+            slice_begin: p.slice_begin,
+            slice_end: p.slice_end,
+        }
+    }
+
+    /// Override fields present in the call's `geometry` object; keep the rest.
+    fn merged_with(self, input: &serde_json::Value) -> Self {
+        let g = &input["geometry"];
+        if !g.is_object() {
+            return self;
+        }
+        let pick = |key: &str, cur: f32| g[key].as_f64().map(|v| v as f32).unwrap_or(cur);
+        Self {
+            path_cut_begin: pick("path_cut_begin", self.path_cut_begin),
+            path_cut_end: pick("path_cut_end", self.path_cut_end),
+            hollow: pick("hollow", self.hollow),
+            twist_begin: pick("twist_begin", self.twist_begin),
+            twist_end: pick("twist_end", self.twist_end),
+            taper_x: pick("taper_x", self.taper_x),
+            taper_y: pick("taper_y", self.taper_y),
+            top_shear_x: pick("top_shear_x", self.top_shear_x),
+            top_shear_y: pick("top_shear_y", self.top_shear_y),
+            slice_begin: pick("slice_begin", self.slice_begin),
+            slice_end: pick("slice_end", self.slice_end),
+        }
+    }
+
+    fn warp(&self) -> prim_ops::WarpParams {
+        prim_ops::WarpParams {
+            twist_begin: self.twist_begin as f64,
+            twist_end: self.twist_end as f64,
+            taper_x: self.taper_x as f64,
+            taper_y: self.taper_y as f64,
+            top_shear_x: self.top_shear_x as f64,
+            top_shear_y: self.top_shear_y as f64,
+            slice_begin: self.slice_begin as f64,
+            slice_end: self.slice_end as f64,
+        }
+    }
+
+    /// Build the prim component fields for this geometry.
+    fn into_prim(self, id: i64, region_id: i64, name: String, shape: &str, color: [f32; 3], texture_id: Option<String>) -> Prim {
+        Prim {
+            id,
+            region_id,
+            name,
+            shape: PrimShape::from_str(shape),
+            color: Color::srgb(color[0], color[1], color[2]),
+            texture_id,
+            path_cut_begin: self.path_cut_begin,
+            path_cut_end: self.path_cut_end,
+            hollow: self.hollow,
+            twist_begin: self.twist_begin,
+            twist_end: self.twist_end,
+            taper_x: self.taper_x,
+            taper_y: self.taper_y,
+            top_shear_x: self.top_shear_x,
+            top_shear_y: self.top_shear_y,
+            slice_begin: self.slice_begin,
+            slice_end: self.slice_end,
+        }
+    }
 }

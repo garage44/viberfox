@@ -2,7 +2,7 @@ use anyhow::Context;
 use glam::Vec3;
 use rusqlite::{Connection, OptionalExtension};
 use vibe_core::world::{lat_lng_to_tile, REGION_ZOOM_LEVEL};
-use vibe_core::{PrimDto, PrimSurface, RegionDto};
+use vibe_core::{PrimDto, PrimGeometry, PrimSurface, RegionDto};
 
 /// Column list (in order) for selecting a full [`PrimDto`]; consumed by [`row_to_prim`].
 const PRIM_COLUMNS: &str = "id, region_id, name, shape, \
@@ -193,6 +193,7 @@ pub fn update_prim(
     texture_id: Option<String>,
     name: &str,
     surface: PrimSurface,
+    geometry: PrimGeometry,
 ) -> anyhow::Result<Option<PrimDto>> {
     // Check if prim exists first
     let exists: bool = conn.query_row(
@@ -217,6 +218,9 @@ pub fn update_prim(
             alpha = ?16, glow = ?17, full_bright = ?18,
             repeat_u = ?19, repeat_v = ?20, flip_u = ?21, flip_v = ?22,
             texture_rotation = ?23, offset_u = ?24, offset_v = ?25,
+            path_cut_begin = ?26, path_cut_end = ?27, hollow = ?28,
+            twist_begin = ?29, twist_end = ?30, taper_x = ?31, taper_y = ?32,
+            top_shear_x = ?33, top_shear_y = ?34, slice_begin = ?35, slice_end = ?36,
             updated_at = datetime('now')
          WHERE id = ?1",
         rusqlite::params![
@@ -225,6 +229,9 @@ pub fn update_prim(
             surface.alpha, surface.glow, surface.full_bright,
             surface.repeat_u, surface.repeat_v, surface.flip_u, surface.flip_v,
             surface.rotation, surface.offset_u, surface.offset_v,
+            geometry.path_cut_begin, geometry.path_cut_end, geometry.hollow,
+            geometry.twist_begin, geometry.twist_end, geometry.taper_x, geometry.taper_y,
+            geometry.top_shear_x, geometry.top_shear_y, geometry.slice_begin, geometry.slice_end,
         ],
     )?;
 
@@ -338,7 +345,31 @@ mod tests {
             [1.0, 0.0, 0.0],
             Some("brick".to_string()),
             "Updated Prim",
-            PrimSurface::default(),
+            PrimSurface {
+                alpha: 0.5,
+                glow: 0.25,
+                full_bright: true,
+                repeat_u: 3.0,
+                repeat_v: 4.0,
+                flip_u: true,
+                flip_v: false,
+                rotation: 90.0,
+                offset_u: 0.1,
+                offset_v: 0.2,
+            },
+            PrimGeometry {
+                path_cut_begin: 0.1,
+                path_cut_end: 0.9,
+                hollow: 0.5,
+                twist_begin: 10.0,
+                twist_end: -10.0,
+                taper_x: 0.3,
+                taper_y: -0.3,
+                top_shear_x: 0.2,
+                top_shear_y: -0.2,
+                slice_begin: 0.05,
+                slice_end: 0.95,
+            },
         )?
         .ok_or_else(|| anyhow::anyhow!("prim not found after update"))?;
 
@@ -350,6 +381,29 @@ mod tests {
         assert_eq!(updated.color, [1.0, 0.0, 0.0]);
         assert_eq!(updated.texture_id, Some("brick".to_string()));
         assert_eq!(updated.name, "Updated Prim");
+
+        // Surface + geometry round-trip through the DB and back into the returned DTO.
+        assert_eq!(updated.surface.alpha, 0.5);
+        assert_eq!(updated.surface.glow, 0.25);
+        assert!(updated.surface.full_bright);
+        assert_eq!(updated.surface.repeat_u, 3.0);
+        assert_eq!(updated.surface.repeat_v, 4.0);
+        assert!(updated.surface.flip_u);
+        assert!(!updated.surface.flip_v);
+        assert_eq!(updated.surface.rotation, 90.0);
+        assert_eq!(updated.hollow, 0.5);
+        assert_eq!(updated.path_cut_begin, 0.1);
+        assert_eq!(updated.path_cut_end, 0.9);
+        assert_eq!(updated.twist_begin, 10.0);
+        assert_eq!(updated.taper_x, 0.3);
+        assert_eq!(updated.slice_end, 0.95);
+
+        // And persists across a fresh read.
+        let reloaded = select_prim_by_id(&conn, prim.id)?
+            .ok_or_else(|| anyhow::anyhow!("prim not found on reload"))?;
+        assert_eq!(reloaded.surface, updated.surface);
+        assert_eq!(reloaded.hollow, 0.5);
+        assert_eq!(reloaded.twist_end, -10.0);
 
         Ok(())
     }
@@ -369,6 +423,7 @@ mod tests {
             None,
             "test",
             PrimSurface::default(),
+            PrimGeometry::default(),
         )?;
 
         assert!(result.is_none());
@@ -433,6 +488,7 @@ mod tests {
             Some("grass".to_string()),
             "Prim",
             PrimSurface::default(),
+            PrimGeometry::default(),
         )?
         .ok_or_else(|| anyhow::anyhow!("prim not found"))?;
 
@@ -470,6 +526,7 @@ mod tests {
             None,
             "Red Box",
             PrimSurface::default(),
+            PrimGeometry::default(),
         )?;
 
         // Delete the other

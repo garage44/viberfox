@@ -34,11 +34,14 @@ pub fn surface_uv_transform(s: &PrimSurface) -> Affine2 {
     if s.flip_v {
         scale.y = -scale.y;
     }
-    Affine2::from_scale_angle_translation(
-        scale,
-        s.rotation.to_radians(),
-        Vec2::new(s.offset_u, s.offset_v),
-    )
+    // Pivot repeats (scale) and rotation about the texture center (0.5, 0.5) so the
+    // texture center stays put as you tile/rotate, then apply the offset.
+    let center = Vec2::splat(0.5);
+    Affine2::from_translation(Vec2::new(s.offset_u, s.offset_v))
+        * Affine2::from_translation(center)
+        * Affine2::from_angle(s.rotation.to_radians())
+        * Affine2::from_scale(scale)
+        * Affine2::from_translation(-center)
 }
 
 /// Apply a prim's surface params onto its material: overall transparency (base-color

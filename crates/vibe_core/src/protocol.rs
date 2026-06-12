@@ -121,6 +121,42 @@ impl Default for PrimSurface {
     }
 }
 
+/// Per-prim geometry deformation parameters (Object tab): path cut, hollow, and the
+/// twist / taper / top-shear / slice "warp" set. Grouped so the online `UpdatePrim`
+/// write path can carry them without a 20-field message variant.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct PrimGeometry {
+    pub path_cut_begin: f32,
+    pub path_cut_end: f32,
+    pub hollow: f32,
+    pub twist_begin: f32,
+    pub twist_end: f32,
+    pub taper_x: f32,
+    pub taper_y: f32,
+    pub top_shear_x: f32,
+    pub top_shear_y: f32,
+    pub slice_begin: f32,
+    pub slice_end: f32,
+}
+
+impl Default for PrimGeometry {
+    fn default() -> Self {
+        Self {
+            path_cut_begin: 0.0,
+            path_cut_end: 1.0,
+            hollow: 0.0,
+            twist_begin: 0.0,
+            twist_end: 0.0,
+            taper_x: 0.0,
+            taper_y: 0.0,
+            top_shear_x: 0.0,
+            top_shear_y: 0.0,
+            slice_begin: 0.0,
+            slice_end: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PrimDto {
     pub id: i64,
@@ -237,6 +273,9 @@ pub enum NetMessage {
         /// Texture surface params (ADR-017 / protocol v8).
         #[serde(default)]
         surface: PrimSurface,
+        /// Geometry deformation params (ADR-018 / protocol v8).
+        #[serde(default)]
+        geometry: PrimGeometry,
     },
     /// ADR-017: client requests deletion of a prim by id.
     DeletePrim {
@@ -410,6 +449,7 @@ mod tests {
             texture_id: Some("brick".into()),
             name: "My Prim".into(),
             surface: PrimSurface::default(),
+            geometry: PrimGeometry::default(),
         };
         let b = encode_app_frame(&m).unwrap();
         let m2 = decode_app_frame(&b).unwrap();

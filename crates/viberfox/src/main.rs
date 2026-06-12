@@ -158,7 +158,9 @@ fn main() {
     .add_systems(
         Update,
         (
-            systems::picking::prim_picking,
+            // After the gizmo so a handle-drag (sets active_axis) is seen this frame and
+            // the click isn't treated as a world selection.
+            systems::picking::prim_picking.after(systems::gizmo::handle_gizmo_interaction),
             systems::picking::update_marquee.after(systems::picking::prim_picking),
             systems::picking::render_marquee.after(systems::picking::update_marquee),
             systems::picking::handle_delete_key,

@@ -30,6 +30,7 @@ pub fn prim_picking(
     region_query: Query<(Entity, &crate::components::Region, &GlobalTransform), Without<Prim>>,
     selected_query: Query<Entity, With<Selected>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    gizmo_state: Res<crate::systems::gizmo::GizmoState>,
 ) {
     // Don't process world clicks when egui has the pointer (toolbar buttons, dialogs, etc.).
     if egui_manager.ctx.wants_pointer_input() {
@@ -67,26 +68,22 @@ pub fn prim_picking(
     let ray_origin = ray.origin;
     let ray_dir = ray.direction.as_vec3();
 
-    // Sphere-based prim hit test. For the currently selected prim we extend the
-    // radius to cover the gizmo arm so clicking on an axis handle does not deselect.
+    // Ray vs oriented-box hit test. The base prim mesh is a unit shape (±0.5 in local
+    // space) scaled and rotated by its transform, so we transform the ray into each
+    // prim's local space and intersect the unit box. The intersection parameter `t` is
+    // shared with the world ray (affine map preserves it), and the world ray direction
+    // is unit, so `t` is the true world distance to the surface the ray strikes. We keep
+    // the prim with the nearest `t` — i.e. the surface actually under the cursor, not
+    // whichever bounding volume's centre happens to sit closest to the camera.
     let mut hit_prim: Option<(Entity, &Prim, f32)> = None;
-    for (entity, prim, prim_transform) in prim_query.iter() {
-        let max_scale = prim_transform.scale().max_element();
-        let radius = if game_state.selected_prim_id == Some(prim.id) {
-            (max_scale * 0.8).max(1.2) // cover gizmo arm
-        } else {
-            max_scale * 0.5
-        };
-        let sphere_center = prim_transform.translation();
-
-        if raycast_sphere(ray_origin, ray_dir, sphere_center, radius) {
-            let distance = (sphere_center - ray_origin).length();
+    for (entity, prim, gt) in prim_query.iter() {
+        let inv = gt.affine().inverse();
+        let local_origin = inv.transform_point3(ray_origin);
+        let local_dir = inv.transform_vector3(ray_dir);
+        if let Some(t) = ray_unit_box(local_origin, local_dir) {
             match hit_prim {
-                None => hit_prim = Some((entity, prim, distance)),
-                Some((_, _, best_dist)) if distance < best_dist => {
-                    hit_prim = Some((entity, prim, distance));
-                }
-                _ => {}
+                Some((_, _, best)) if t >= best => {}
+                _ => hit_prim = Some((entity, prim, t)),
             }
         }
     }
@@ -95,7 +92,10 @@ pub fn prim_picking(
 
     // Left-click: select / deselect / start marquee
     if mouse_buttons.just_pressed(MouseButton::Left) {
-        if let Some((entity, prim, _)) = hit_prim {
+        if gizmo_state.active_axis.is_some() {
+            // A gizmo handle drag started on this click (it runs first) — keep the
+            // current selection instead of treating the arm click as a world click.
+        } else if let Some((entity, prim, _)) = hit_prim {
             if shift {
                 // Shift+click: toggle this prim in the selection.
                 if selected_query.get(entity).is_ok() {
@@ -364,16 +364,37 @@ fn ray_plane_y(origin: Vec3, dir: Vec3, y: f32) -> Option<Vec3> {
     Some(origin + dir * t)
 }
 
-/// Simple ray-sphere intersection test.
-fn raycast_sphere(ray_origin: Vec3, ray_dir: Vec3, sphere_center: Vec3, radius: f32) -> bool {
-    let oc = ray_origin - sphere_center;
-    let a = ray_dir.dot(ray_dir);
-    let b = 2.0 * oc.dot(ray_dir);
-    let c = oc.dot(oc) - radius * radius;
-    let discriminant = b * b - 4.0 * a * c;
-
-    discriminant >= 0.0 && {
-        let t = (-b - discriminant.sqrt()) / (2.0 * a);
-        t > 0.0
+/// Ray vs the unit box `[-0.5, 0.5]³` (slab method). `o`/`d` are the ray in the box's
+/// local space. Returns the nearest non-negative entry distance `t` (the parameter
+/// `o + t·d`), or `None` if the ray misses. When the ray starts inside the box, the
+/// exit distance is returned so an enclosing prim can still be picked.
+fn ray_unit_box(o: Vec3, d: Vec3) -> Option<f32> {
+    const H: f32 = 0.5;
+    let mut t_enter = f32::NEG_INFINITY;
+    let mut t_exit = f32::INFINITY;
+    for i in 0..3 {
+        let (oi, di) = (o[i], d[i]);
+        if di.abs() < 1e-8 {
+            // Ray parallel to this slab: origin must already lie within it.
+            if oi < -H || oi > H {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / di;
+            let mut t1 = (-H - oi) * inv;
+            let mut t2 = (H - oi) * inv;
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            t_enter = t_enter.max(t1);
+            t_exit = t_exit.min(t2);
+            if t_enter > t_exit {
+                return None;
+            }
+        }
     }
+    if t_exit < 0.0 {
+        return None; // box is entirely behind the ray
+    }
+    Some(if t_enter >= 0.0 { t_enter } else { t_exit })
 }

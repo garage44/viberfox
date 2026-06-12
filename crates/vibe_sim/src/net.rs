@@ -117,9 +117,20 @@ pub async fn handle_connection(
                             NetMessage::ClientHello { .. } => {
                                 tracing::warn!("duplicate hello ignored");
                             }
-                            NetMessage::CreatePrim { request_id, region_id, position, shape } => {
+                            NetMessage::CreatePrim {
+                                request_id, region_id, name, position, rotation, scale,
+                                color, texture_id, shape, surface, geometry,
+                            } => {
                                 let mut w = world.write().await;
-                                match w.add_prim(region_id, position, &shape) {
+                                // Insert with a server-assigned id, then apply the full initial
+                                // authoring state in one update so it is persisted and broadcast.
+                                let created = w.add_prim(region_id, position, &shape).and_then(|prim| {
+                                    w.update_prim(
+                                        prim.id, position, rotation, scale, color, texture_id,
+                                        &name, surface, geometry,
+                                    )
+                                });
+                                match created {
                                     Ok(prim) => {
                                         // Broadcast PrimUpsert to all clients
                                         let broadcast_msg = encode_app_frame(&NetMessage::PrimUpsert { prim })?;

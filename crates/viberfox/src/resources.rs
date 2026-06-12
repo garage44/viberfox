@@ -210,6 +210,26 @@ impl Default for EditDialogState {
     }
 }
 
+impl EditDialogState {
+    /// Geometry deformation params (path-cut / hollow / warp) as a protocol value,
+    /// for online `CreatePrim` / `UpdatePrim`.
+    pub fn geometry(&self) -> vibe_core::PrimGeometry {
+        vibe_core::PrimGeometry {
+            path_cut_begin: self.path_cut_begin,
+            path_cut_end: self.path_cut_end,
+            hollow: self.hollow,
+            twist_begin: self.warp.twist_begin,
+            twist_end: self.warp.twist_end,
+            taper_x: self.warp.taper_x,
+            taper_y: self.warp.taper_y,
+            top_shear_x: self.warp.top_shear_x,
+            top_shear_y: self.warp.top_shear_y,
+            slice_begin: self.warp.slice_begin,
+            slice_end: self.warp.slice_end,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct AvatarState {
     /// Authoritative sim position (from server when online).

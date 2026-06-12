@@ -253,12 +253,21 @@ pub enum NetMessage {
     PrimRemoved {
         id: i64,
     },
-    /// ADR-017: client requests creation of a new prim.
+    /// ADR-017 / ADR-018: client requests creation of a new prim with full initial state.
     CreatePrim {
         request_id: u32,
         region_id: i64,
+        name: String,
         position: Vec3,
+        rotation: Vec3,
+        scale: Vec3,
+        color: [f32; 3],
+        texture_id: Option<String>,
         shape: String,
+        #[serde(default)]
+        surface: PrimSurface,
+        #[serde(default)]
+        geometry: PrimGeometry,
     },
     /// ADR-017: client sends updated prim state (position, rotation, scale, color, texture, name).
     UpdatePrim {
@@ -429,8 +438,15 @@ mod tests {
         let m = NetMessage::CreatePrim {
             request_id: 123,
             region_id: 1,
+            name: "New Prim".into(),
             position: Vec3::new(10.0, 5.0, 20.0),
+            rotation: Vec3::ZERO,
+            scale: Vec3::ONE,
+            color: [0.5, 0.5, 0.5],
+            texture_id: None,
             shape: "box".into(),
+            surface: PrimSurface::default(),
+            geometry: PrimGeometry::default(),
         };
         let b = encode_app_frame(&m).unwrap();
         let m2 = decode_app_frame(&b).unwrap();

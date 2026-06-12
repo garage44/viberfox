@@ -311,7 +311,7 @@ pub fn handle_gizmo_interaction(
                     texture_id: edit_dialog.texture_id.clone(),
                     name: edit_dialog.name.clone(),
                     surface: edit_dialog.surface,
-                    geometry: dialog_geometry(&edit_dialog),
+                    geometry: edit_dialog.geometry(),
                 });
             }
             gizmo_state.active_axis = None;
@@ -383,7 +383,7 @@ pub fn handle_gizmo_interaction(
                 texture_id: edit_dialog.texture_id.clone(),
                 name: edit_dialog.name.clone(),
                 surface: edit_dialog.surface,
-                geometry: dialog_geometry(&edit_dialog),
+                geometry: edit_dialog.geometry(),
             });
         }
     }
@@ -393,21 +393,4 @@ fn generate_request_id() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Snapshot the edit dialog's geometry deformation params for an online `UpdatePrim`.
-fn dialog_geometry(d: &crate::resources::EditDialogState) -> vibe_core::PrimGeometry {
-    vibe_core::PrimGeometry {
-        path_cut_begin: d.path_cut_begin,
-        path_cut_end: d.path_cut_end,
-        hollow: d.hollow,
-        twist_begin: d.warp.twist_begin,
-        twist_end: d.warp.twist_end,
-        taper_x: d.warp.taper_x,
-        taper_y: d.warp.taper_y,
-        top_shear_x: d.warp.top_shear_x,
-        top_shear_y: d.warp.top_shear_y,
-        slice_begin: d.warp.slice_begin,
-        slice_end: d.warp.slice_end,
-    }
 }

@@ -24,6 +24,15 @@ pub fn repeat_linear_sampler() -> ImageSampler {
     })
 }
 
+/// Subtle selection cue added on top of a surfaced material: a faint additive blue
+/// emissive that signals "selected" while leaving the prim's color and texture clearly
+/// visible (unlike a full base-color tint, which reads as a solid slab). The gizmo arms
+/// provide the primary selection affordance; this is just a gentle wash.
+pub fn apply_selection_highlight(mat: &mut StandardMaterial) {
+    let e = mat.emissive;
+    mat.emissive = LinearRgba::new(e.red + 0.03, e.green + 0.06, e.blue + 0.16, 1.0);
+}
+
 /// Build the UV transform for a prim's texture from its surface params
 /// (repeats per face = UV scale, flip = negative scale, rotation, offset).
 pub fn surface_uv_transform(s: &PrimSurface) -> Affine2 {
@@ -246,6 +255,9 @@ pub fn refresh_prim_textures(
                 .as_ref()
                 .and_then(|id| cache.handles.get(id))
                 .cloned();
+            // Also re-apply the surface so a PrimUpsert that changed transparency/glow/
+            // repeats/etc. (not just the texture) is reflected.
+            apply_surface(mat, prim.color, &prim.surface);
         }
         commands.entity(entity).remove::<NeedsTextureRefresh>();
     }

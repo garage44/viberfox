@@ -323,14 +323,10 @@ pub fn highlight_selected_prim(
 ) {
     for (prim, material_handle) in selected_query.iter() {
         if let Some(material) = materials.get_mut(&material_handle.0) {
-            let brightened = prim.color.to_linear();
-            material.base_color = Color::linear_rgba(
-                (brightened.red * 1.5).min(1.0),
-                (brightened.green * 1.5).min(1.0),
-                (brightened.blue * 1.5).min(1.0),
-                prim.surface.alpha,
-            );
-            material.emissive = LinearRgba::new(0.2, 0.3, 0.5, 1.0);
+            // Keep the real surface (color/texture/alpha/glow/uv) and add only a subtle
+            // highlight, so the texture stays visible while the prim is selected.
+            crate::systems::rendering::apply_surface(material, prim.color, &prim.surface);
+            crate::systems::rendering::apply_selection_highlight(material);
         }
     }
 }

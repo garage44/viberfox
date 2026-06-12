@@ -7,9 +7,11 @@ use crate::components::{NeedsMeshRebuild, Prim, PrimShape, Region, Selected};
 use crate::resources::{
     ContextMenuState, Database, EditDialogState, GameState, PrimTextureCache, TextureLibrary,
 };
+use crate::resources::OnlineSession;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use egui::Window;
+use vibe_core::NetMessage;
 
 /// Render context menu when a prim is right-clicked
 pub fn render_context_menu(
@@ -743,19 +745,10 @@ pub fn apply_live_prim_edits(
         // highlight_selected_prim won't fire on its own.
         if let Some(handle) = mat_handle {
             if let Some(mat) = materials.get_mut(&handle.0) {
-                // Live preview of the texture surface (transparency / glow / full-bright / UV).
+                // Live preview of the texture surface (transparency / glow / full-bright / UV),
+                // then a subtle selection highlight on top so the surface stays visible.
                 crate::systems::rendering::apply_surface(mat, new_color, &edit_dialog.surface);
-                // Re-apply the selection highlight on top: brighten RGB, add the blue tint
-                // to the glow emissive so both stay visible while editing.
-                let lin = mat.base_color.to_linear();
-                mat.base_color = Color::linear_rgba(
-                    (lin.red * 1.5).min(1.0),
-                    (lin.green * 1.5).min(1.0),
-                    (lin.blue * 1.5).min(1.0),
-                    lin.alpha,
-                );
-                let e = mat.emissive;
-                mat.emissive = LinearRgba::new(e.red + 0.2, e.green + 0.3, e.blue + 0.5, 1.0);
+                crate::systems::rendering::apply_selection_highlight(mat);
             }
         }
         break;
@@ -831,12 +824,46 @@ pub fn send_prim_mutations(
     region_query: Query<&Region>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     texture_cache: Res<PrimTextureCache>,
+    online: Option<Res<OnlineSession>>,
 ) {
     use crate::systems::prim_ops;
 
     if let Some(dialog_state) = game_state.pending_prim_save.take() {
         if dialog_state.is_new {
             let region_id = region_query.iter().next().map(|r| r.id).unwrap_or(1);
+
+            // Online: ask the server to create the prim with its full initial state; the
+            // PrimUpsert echo spawns it locally with the server-assigned id.
+            if let Some(sess) = online.as_ref() {
+                let _ = sess.intent_tx.send(NetMessage::CreatePrim {
+                    request_id: 0,
+                    region_id,
+                    name: dialog_state.name.clone(),
+                    position: Vec3::new(
+                        dialog_state.position[0],
+                        dialog_state.position[1],
+                        dialog_state.position[2],
+                    ),
+                    rotation: Vec3::new(
+                        dialog_state.rotation[0],
+                        dialog_state.rotation[1],
+                        dialog_state.rotation[2],
+                    ),
+                    scale: Vec3::new(
+                        dialog_state.scale[0],
+                        dialog_state.scale[1],
+                        dialog_state.scale[2],
+                    ),
+                    color: dialog_state.color,
+                    texture_id: dialog_state.texture_id.clone(),
+                    shape: dialog_state.shape.clone(),
+                    surface: dialog_state.surface,
+                    geometry: dialog_state.geometry(),
+                });
+                tracing::info!(name = %dialog_state.name, "sent CreatePrim (online)");
+                return;
+            }
+
             let tex = dialog_state.texture_id.as_deref();
 
             let new_id: Option<i64> = db.as_ref().and_then(|db| {
@@ -924,6 +951,35 @@ pub fn send_prim_mutations(
                 tracing::info!(id, name = %dialog_state.name, "created prim");
             }
         } else if let Some(prim_id) = dialog_state.prim_id {
+            // Online: send the authoritative update to the server. We still apply it
+            // locally below for immediate feedback; the PrimUpsert echo is skipped for
+            // the selected prim, so there's no fight.
+            if let Some(sess) = online.as_ref() {
+                let _ = sess.intent_tx.send(NetMessage::UpdatePrim {
+                    request_id: 0,
+                    prim_id,
+                    position: Vec3::new(
+                        dialog_state.position[0],
+                        dialog_state.position[1],
+                        dialog_state.position[2],
+                    ),
+                    rotation: Vec3::new(
+                        dialog_state.rotation[0],
+                        dialog_state.rotation[1],
+                        dialog_state.rotation[2],
+                    ),
+                    scale: Vec3::new(
+                        dialog_state.scale[0],
+                        dialog_state.scale[1],
+                        dialog_state.scale[2],
+                    ),
+                    color: dialog_state.color,
+                    texture_id: dialog_state.texture_id.clone(),
+                    name: dialog_state.name.clone(),
+                    surface: dialog_state.surface,
+                    geometry: dialog_state.geometry(),
+                });
+            }
             let tex = dialog_state.texture_id.as_deref();
             if let Some(ref db) = db {
                 let conn = db.conn.lock().unwrap();
@@ -1082,6 +1138,11 @@ pub fn send_prim_mutations(
     }
 
     for prim_id in std::mem::take(&mut game_state.prims_to_delete) {
+        if let Some(sess) = online.as_ref() {
+            let _ = sess
+                .intent_tx
+                .send(NetMessage::DeletePrim { request_id: 0, prim_id });
+        }
         if let Some(ref db) = db {
             let conn = db.conn.lock().unwrap();
             let _ = conn.execute("DELETE FROM prims WHERE id=?1", rusqlite::params![prim_id]);

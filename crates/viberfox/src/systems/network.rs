@@ -1,6 +1,6 @@
 //! TCP client for `--connect` (ADR-008, ADR-009).
 
-use crate::components::{Avatar, NeedsTextureRefresh, Prim, PrimShape, Region, RemoteAvatar, RemoteAvatarMotionHint};
+use crate::components::{Avatar, NeedsMeshRebuild, NeedsTextureRefresh, Prim, PrimShape, Region, RemoteAvatar, RemoteAvatarMotionHint};
 use crate::resources::{
     AvatarState, CameraState, ConnectAddr, GameState, LocalAvatarSimId, NetworkMailbox,
     NetworkSyncState, OnlineSession, OsmTileUrlTemplate, PrimTextureCache, TextureLibrary,
@@ -147,7 +147,12 @@ pub fn apply_network_snapshot(
     mut local_sim_id: ResMut<LocalAvatarSimId>,
     camera_state: Res<CameraState>,
     region_entities: Query<Entity, With<Region>>,
-    prim_entities: Query<(Entity, &Prim)>,
+    // Excludes avatars so the `&mut Transform` access is provably disjoint from
+    // `avatar_tf` below (prims never carry Avatar/RemoteAvatar).
+    mut prim_entities: Query<
+        (Entity, &mut Prim, &mut Transform),
+        (Without<Avatar>, Without<RemoteAvatar>),
+    >,
     mut avatar_tf: Query<&mut Transform, (With<Avatar>, Without<RemoteAvatar>)>,
     mut remote_avatars: Query<(Entity, &mut RemoteAvatar), Without<Avatar>>,
     mut texture_lib: ResMut<TextureLibrary>,
@@ -189,7 +194,7 @@ pub fn apply_network_snapshot(
                 for e in region_es {
                     commands.entity(e).despawn();
                 }
-                let prim_es: Vec<Entity> = prim_entities.iter().map(|(e, _)| e).collect();
+                let prim_es: Vec<Entity> = prim_entities.iter().map(|(e, _, _)| e).collect();
                 for e in prim_es {
                     commands.entity(e).despawn();
                 }
@@ -229,11 +234,37 @@ pub fn apply_network_snapshot(
                 }
             }
             NetMessage::PrimRemoved { id } => {
-                for (e, p) in prim_entities.iter() {
+                for (e, p, _) in prim_entities.iter() {
                     if p.id == id {
                         commands.entity(e).despawn();
                         break;
                     }
+                }
+            }
+            NetMessage::PrimUpsert { prim } => {
+                // Don't disrupt the prim the local user is actively manipulating: the
+                // local copy is authoritative until deselect (and was applied locally
+                // when the edit was made). Other prims reflect the server immediately.
+                if game_state.selected_prim_id == Some(prim.id) {
+                    continue;
+                }
+                let mut found = false;
+                for (entity, mut p, mut tf) in prim_entities.iter_mut() {
+                    if p.id == prim.id {
+                        *p = prim_from_dto(&prim);
+                        *tf = transform_from_dto(&prim);
+                        // Geometry may have changed → rebuild mesh; texture/surface →
+                        // refresh material (refresh_prim_textures re-applies both).
+                        commands
+                            .entity(entity)
+                            .insert(NeedsMeshRebuild)
+                            .insert(NeedsTextureRefresh);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    commands.spawn(prim_bundle_from_dto(prim));
                 }
             }
             NetMessage::TextureCatalog { textures } => {
@@ -259,7 +290,7 @@ pub fn apply_network_snapshot(
                     Some(img) => {
                         let handle = images.add(img);
                         texture_cache.handles.insert(texture_id.clone(), handle);
-                        for (entity, prim) in prim_entities.iter() {
+                        for (entity, prim, _) in prim_entities.iter() {
                             if prim.texture_id.as_deref() == Some(&texture_id) {
                                 commands.entity(entity).insert(NeedsTextureRefresh);
                             }
@@ -386,37 +417,42 @@ fn region_from_dto(r: RegionDto) -> Region {
     }
 }
 
+fn prim_from_dto(p: &PrimDto) -> Prim {
+    Prim {
+        id: p.id,
+        region_id: p.region_id,
+        name: p.name.clone(),
+        shape: PrimShape::from_str(&p.shape),
+        color: Color::srgb(p.color[0], p.color[1], p.color[2]),
+        texture_id: p.texture_id.clone(),
+        path_cut_begin: p.path_cut_begin,
+        path_cut_end: p.path_cut_end,
+        hollow: p.hollow,
+        twist_begin: p.twist_begin,
+        twist_end: p.twist_end,
+        taper_x: p.taper_x,
+        taper_y: p.taper_y,
+        top_shear_x: p.top_shear_x,
+        top_shear_y: p.top_shear_y,
+        slice_begin: p.slice_begin,
+        slice_end: p.slice_end,
+        surface: p.surface,
+    }
+}
+
+fn transform_from_dto(p: &PrimDto) -> Transform {
+    Transform::from_translation(p.position)
+        .with_rotation(Quat::from_euler(
+            EulerRot::XYZ,
+            p.rotation.x,
+            p.rotation.y,
+            p.rotation.z,
+        ))
+        .with_scale(p.scale)
+}
+
 fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
-    (
-        Prim {
-            id: p.id,
-            region_id: p.region_id,
-            name: p.name,
-            shape: PrimShape::from_str(&p.shape),
-            color: Color::srgb(p.color[0], p.color[1], p.color[2]),
-            texture_id: p.texture_id,
-            path_cut_begin: p.path_cut_begin,
-            path_cut_end: p.path_cut_end,
-            hollow: p.hollow,
-            twist_begin: p.twist_begin,
-            twist_end: p.twist_end,
-            taper_x: p.taper_x,
-            taper_y: p.taper_y,
-            top_shear_x: p.top_shear_x,
-            top_shear_y: p.top_shear_y,
-            slice_begin: p.slice_begin,
-            slice_end: p.slice_end,
-            surface: p.surface,
-        },
-        Transform::from_translation(p.position)
-            .with_rotation(Quat::from_euler(
-                EulerRot::XYZ,
-                p.rotation.x,
-                p.rotation.y,
-                p.rotation.z,
-            ))
-            .with_scale(p.scale),
-    )
+    (prim_from_dto(&p), transform_from_dto(&p))
 }
 
 fn decode_png_to_image(png_bytes: &[u8]) -> Option<Image> {

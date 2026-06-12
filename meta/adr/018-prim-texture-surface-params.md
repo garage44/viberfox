@@ -67,9 +67,15 @@ edit dialog.
 - Texture rotation and repeats pivot about the texture center (0.5, 0.5).
 - `UpdatePrim` carries both `PrimSurface` and `PrimGeometry`; the server persists all of
   them, so surface and geometry survive a reconnect / fresh `WorldSnapshot`.
-- **Separate pre-existing gap (not addressed here):** `PrimUpsert` broadcasts are not
-  applied client-side, and dialog **Save** does not emit `UpdatePrim` online (only gizmo
-  drags do). So *live* cross-client propagation of any edited field (color, texture,
-  surface, geometry) doesn't happen yet — edits persist server-side and appear on the
-  next full world load. Wiring `PrimUpsert` application + an online Save path is its own
-  follow-up.
+- **Online prim authoring is now wired end-to-end.** The dialog's Save/Create/Delete emit
+  `UpdatePrim` / `CreatePrim` / `DeletePrim` when connected (previously only gizmo drags
+  sent anything). `CreatePrim` was extended to carry the full initial authoring state
+  (name/transform/color/texture/surface/geometry) so online create has offline parity; the
+  server inserts then applies it in one step and broadcasts `PrimUpsert`.
+- The client now applies `PrimUpsert` broadcasts: existing prims update **in place**
+  (mesh/texture/surface refreshed via marker components — no despawn/respawn flicker at the
+  ~20 Hz gizmo-drag rate), and unknown ids spawn. The prim the local user currently has
+  selected is skipped, since its local copy is authoritative during editing and was already
+  applied locally — avoiding an echo fight.
+- Selection highlight is a subtle additive emissive (not a base-color tint), so the texture
+  stays visible while a prim is selected/edited.

@@ -60,11 +60,16 @@ edit dialog.
 |---|---|---|---|
 | Ten flat fields on every struct | explicit | ~200 lines of threading churn | grouped struct is far smaller |
 | Custom material/shader for UV + glow | full control | new pipeline, more maintenance | `StandardMaterial` suffices |
-| Carry full `PrimDto` in `UpdatePrim` | future-proof | large test/handler churn | single `surface` field is enough for now |
+| Carry full `PrimDto` in `UpdatePrim` | future-proof | large test/handler churn | `surface` + `geometry` value types are enough |
 
 ## Notes / Limitations
 
-- Texture rotation pivots about the UV origin, not the face center (acceptable for v1).
-- The online `UpdatePrim` write path still does not carry geometry (path-cut/hollow/warp);
-  the server now *reads* those columns but nothing writes them yet. Closing that write
-  gap is follow-up work.
+- Texture rotation and repeats pivot about the texture center (0.5, 0.5).
+- `UpdatePrim` carries both `PrimSurface` and `PrimGeometry`; the server persists all of
+  them, so surface and geometry survive a reconnect / fresh `WorldSnapshot`.
+- **Separate pre-existing gap (not addressed here):** `PrimUpsert` broadcasts are not
+  applied client-side, and dialog **Save** does not emit `UpdatePrim` online (only gizmo
+  drags do). So *live* cross-client propagation of any edited field (color, texture,
+  surface, geometry) doesn't happen yet — edits persist server-side and appear on the
+  next full world load. Wiring `PrimUpsert` application + an online Save path is its own
+  follow-up.

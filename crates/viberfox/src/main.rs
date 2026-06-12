@@ -173,6 +173,10 @@ fn main() {
         Update,
         (
             systems::ui::render_context_menu,
+            // Follow selection changes from picking before the dialog draws / live edits apply.
+            systems::ui::sync_dialog_to_selection
+                .after(systems::picking::prim_picking)
+                .before(systems::ui::render_edit_dialog),
             systems::ui::render_edit_dialog,
             systems::ui::apply_live_prim_edits.after(systems::ui::render_edit_dialog),
             systems::ui::send_prim_mutations.after(systems::ui::render_edit_dialog),

@@ -58,6 +58,89 @@ pub fn toggle_ai_panel_shortcut(
     }
 }
 
+/// Fill the edit dialog's fields and revert snapshots from a prim. Leaves `visible` and
+/// `active_tab` untouched, so it serves both opening the dialog and following a selection
+/// change. Sets `is_new = false` and `prim_id` to this prim.
+pub fn populate_edit_dialog(
+    edit_dialog: &mut EditDialogState,
+    prim: &Prim,
+    transform: &Transform,
+) {
+    edit_dialog.prim_id = Some(prim.id);
+    edit_dialog.is_new = false;
+    edit_dialog.name = prim.name.clone();
+    let color = {
+        let c = prim.color.to_linear();
+        [c.red, c.green, c.blue]
+    };
+    edit_dialog.color = color;
+    let shape = format!("{:?}", prim.shape).to_lowercase();
+    edit_dialog.shape = shape.clone();
+    let pos = transform.translation;
+    edit_dialog.position = [pos.x, pos.y, pos.z];
+    let rot = transform.rotation.to_euler(EulerRot::XYZ);
+    edit_dialog.rotation = [rot.0, rot.1, rot.2];
+    let scale_v = transform.scale;
+    edit_dialog.scale = [scale_v.x, scale_v.y, scale_v.z];
+    edit_dialog.texture_id = prim.texture_id.clone();
+    edit_dialog.path_cut_begin = prim.path_cut_begin;
+    edit_dialog.path_cut_end = prim.path_cut_end;
+    edit_dialog.hollow = prim.hollow;
+    edit_dialog.surface = prim.surface;
+    edit_dialog.repeats_per_meter = 0.0;
+    edit_dialog.warp = crate::resources::PrimWarp {
+        twist_begin: prim.twist_begin,
+        twist_end: prim.twist_end,
+        taper_x: prim.taper_x,
+        taper_y: prim.taper_y,
+        top_shear_x: prim.top_shear_x,
+        top_shear_y: prim.top_shear_y,
+        slice_begin: prim.slice_begin,
+        slice_end: prim.slice_end,
+    };
+    // Snapshot for Cancel revert.
+    edit_dialog.original_name = prim.name.clone();
+    edit_dialog.original_color = color;
+    edit_dialog.original_shape = shape;
+    edit_dialog.original_position = edit_dialog.position;
+    edit_dialog.original_rotation = edit_dialog.rotation;
+    edit_dialog.original_scale = edit_dialog.scale;
+    edit_dialog.original_texture_id = prim.texture_id.clone();
+    edit_dialog.original_path_cut_begin = prim.path_cut_begin;
+    edit_dialog.original_path_cut_end = prim.path_cut_end;
+    edit_dialog.original_hollow = prim.hollow;
+    edit_dialog.original_warp = edit_dialog.warp;
+    edit_dialog.original_surface = prim.surface;
+    edit_dialog.texture_picker_open = false;
+}
+
+/// While the edit dialog is open, keep it pointed at the currently selected prim so
+/// clicking a different prim updates the dialog instead of leaving it on the old one.
+pub fn sync_dialog_to_selection(
+    mut edit_dialog: ResMut<EditDialogState>,
+    mut game_state: ResMut<GameState>,
+    prim_query: Query<(&Prim, &Transform)>,
+) {
+    // Only follow selection for an open editor of an existing prim (never clobber a
+    // half-filled "Create Prim" dialog).
+    if !edit_dialog.visible || edit_dialog.is_new {
+        return;
+    }
+    let Some(selected) = game_state.selected_prim_id else {
+        return;
+    };
+    if edit_dialog.prim_id == Some(selected) {
+        return; // already showing the selected prim
+    }
+    for (prim, transform) in prim_query.iter() {
+        if prim.id == selected {
+            populate_edit_dialog(&mut edit_dialog, prim, transform);
+            game_state.editing_prim_id = Some(selected);
+            break;
+        }
+    }
+}
+
 /// Render context menu when a prim is right-clicked
 pub fn render_context_menu(
     mut commands: Commands,
@@ -93,52 +176,7 @@ pub fn render_context_menu(
                             commands.entity(entity).insert(Selected);
                             game_state.selected_prim_id = Some(prim_id);
                             game_state.editing_prim_id = Some(prim_id);
-                            edit_dialog.prim_id = Some(prim_id);
-                            edit_dialog.is_new = false;
-                            edit_dialog.name = prim.name.clone();
-                            let color = {
-                                let c = prim.color.to_linear();
-                                [c.red, c.green, c.blue]
-                            };
-                            edit_dialog.color = color;
-                            let shape = format!("{:?}", prim.shape).to_lowercase();
-                            edit_dialog.shape = shape.clone();
-                            let pos = transform.translation;
-                            edit_dialog.position = [pos.x, pos.y, pos.z];
-                            let rot = transform.rotation.to_euler(EulerRot::XYZ);
-                            edit_dialog.rotation = [rot.0, rot.1, rot.2];
-                            let scale_v = transform.scale;
-                            edit_dialog.scale = [scale_v.x, scale_v.y, scale_v.z];
-                            edit_dialog.texture_id = prim.texture_id.clone();
-                            edit_dialog.path_cut_begin = prim.path_cut_begin;
-                            edit_dialog.path_cut_end = prim.path_cut_end;
-                            edit_dialog.hollow = prim.hollow;
-                            edit_dialog.surface = prim.surface;
-                            edit_dialog.repeats_per_meter = 0.0;
-                            edit_dialog.warp = crate::resources::PrimWarp {
-                                twist_begin: prim.twist_begin,
-                                twist_end: prim.twist_end,
-                                taper_x: prim.taper_x,
-                                taper_y: prim.taper_y,
-                                top_shear_x: prim.top_shear_x,
-                                top_shear_y: prim.top_shear_y,
-                                slice_begin: prim.slice_begin,
-                                slice_end: prim.slice_end,
-                            };
-                            // Snapshot for Cancel revert.
-                            edit_dialog.original_name = prim.name.clone();
-                            edit_dialog.original_color = color;
-                            edit_dialog.original_shape = shape;
-                            edit_dialog.original_position = edit_dialog.position;
-                            edit_dialog.original_rotation = edit_dialog.rotation;
-                            edit_dialog.original_scale = edit_dialog.scale;
-                            edit_dialog.original_texture_id = prim.texture_id.clone();
-                            edit_dialog.original_path_cut_begin = prim.path_cut_begin;
-                            edit_dialog.original_path_cut_end = prim.path_cut_end;
-                            edit_dialog.original_hollow = prim.hollow;
-                            edit_dialog.original_warp = edit_dialog.warp;
-                            edit_dialog.original_surface = prim.surface;
-                            edit_dialog.texture_picker_open = false;
+                            populate_edit_dialog(&mut edit_dialog, prim, transform);
                             edit_dialog.visible = true;
                             break;
                         }

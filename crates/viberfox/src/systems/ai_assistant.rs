@@ -266,17 +266,7 @@ pub fn render_ai_panel(
     let ctx = egui.ctx_mut();
 
     if !state.open {
-        let screen = ctx.screen_rect();
-        egui::Window::new("ai_tab")
-            .title_bar(false)
-            .resizable(false)
-            .fixed_pos(egui::pos2(screen.max.x - 42.0, screen.max.y * 0.5 - 16.0))
-            .fixed_size([38.0, 32.0])
-            .show(ctx, |ui| {
-                if ui.button("AI").clicked() {
-                    state.open = true;
-                }
-            });
+        // Opened via the View menu (View ▸ Show AI Panel) or Ctrl+Shift+A.
         return;
     }
 

@@ -140,7 +140,7 @@ pub struct EditDialogState {
     pub visible: bool,
     pub is_new: bool,
     pub prim_id: Option<i64>,
-    pub active_tab: u8, // 0 = Object, 1 = Texture
+    pub active_tab: u8, // 0 = Edit, 1 = Object, 2 = Texture
     pub name: String,
     pub shape: String,
     pub position: [f32; 3],

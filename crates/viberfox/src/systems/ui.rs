@@ -11,7 +11,52 @@ use crate::resources::OnlineSession;
 use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use egui::Window;
+use crate::resources::AiAssistantState;
 use vibe_core::NetMessage;
+
+/// Top menu bar: `File ▸ Exit` and `View ▸ Show/Hide AI Panel`.
+pub fn render_menu_bar(
+    mut egui: ResMut<EguiManager>,
+    mut ai_state: ResMut<AiAssistantState>,
+    mut app_exit: EventWriter<AppExit>,
+) {
+    let ctx = egui.ctx_mut();
+    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Exit").clicked() {
+                    app_exit.write(AppExit::Success);
+                    ui.close_menu();
+                }
+            });
+            ui.menu_button("View", |ui| {
+                let label = if ai_state.open {
+                    "Hide AI Panel"
+                } else {
+                    "Show AI Panel"
+                };
+                if ui.button(label).clicked() {
+                    ai_state.open = !ai_state.open;
+                    ui.close_menu();
+                }
+            });
+        });
+    });
+}
+
+/// Toggle the AI panel with Ctrl+Shift+A.
+pub fn toggle_ai_panel_shortcut(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut ai_state: ResMut<AiAssistantState>,
+) {
+    let ctrl =
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let shift =
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if ctrl && shift && keyboard.just_pressed(KeyCode::KeyA) {
+        ai_state.open = !ai_state.open;
+    }
+}
 
 /// Render context menu when a prim is right-clicked
 pub fn render_context_menu(
@@ -149,6 +194,7 @@ pub fn render_edit_dialog(
     mut edit_dialog: ResMut<EditDialogState>,
     mut game_state: ResMut<GameState>,
     texture_lib: Res<TextureLibrary>,
+    mut gizmo_state: ResMut<crate::systems::gizmo::GizmoState>,
 ) {
     if !edit_dialog.visible {
         return;
@@ -169,22 +215,51 @@ pub fn render_edit_dialog(
         .show(ctx, |ui| {
             // Tab bar
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut edit_dialog.active_tab, 0, "Object");
-                ui.selectable_value(&mut edit_dialog.active_tab, 1, "Texture");
+                ui.selectable_value(&mut edit_dialog.active_tab, 0, "Edit");
+                ui.selectable_value(&mut edit_dialog.active_tab, 1, "Object");
+                ui.selectable_value(&mut edit_dialog.active_tab, 2, "Texture");
             });
             ui.separator();
 
             match edit_dialog.active_tab {
-                // ── Object tab ──────────────────────────────────────────────
+                // ── Edit tab ────────────────────────────────────────────────
                 0 => {
-                    egui::Grid::new("object_grid")
+                    use crate::systems::gizmo::GizmoMode;
+                    egui::Grid::new("edit_grid")
                         .num_columns(2)
-                        .spacing([8.0, 4.0])
+                        .spacing([8.0, 6.0])
                         .show(ui, |ui| {
                             ui.label("Name");
                             ui.text_edit_singleline(&mut edit_dialog.name);
                             ui.end_row();
 
+                            ui.label("Tool");
+                            ui.horizontal(|ui| {
+                                ui.radio_value(
+                                    &mut gizmo_state.mode,
+                                    GizmoMode::Translate,
+                                    "Move (T)",
+                                );
+                                ui.radio_value(
+                                    &mut gizmo_state.mode,
+                                    GizmoMode::Rotate,
+                                    "Rotate (R)",
+                                );
+                                ui.radio_value(
+                                    &mut gizmo_state.mode,
+                                    GizmoMode::Scale,
+                                    "Scale (S)",
+                                );
+                            });
+                            ui.end_row();
+                        });
+                }
+                // ── Object tab ──────────────────────────────────────────────
+                1 => {
+                    egui::Grid::new("object_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
                             ui.label("Building Block Type");
                             egui::ComboBox::from_id_salt("shape_combo")
                                 .selected_text(shape_display_name(&edit_dialog.shape))
@@ -569,19 +644,19 @@ pub fn render_edit_dialog(
 
             // Dialog buttons — always visible regardless of active tab
             ui.horizontal(|ui| {
-                if ui.button("Save (S)").clicked() {
+                if ui.button("Save").clicked() {
                     game_state.pending_prim_save = Some(edit_dialog.clone());
                     edit_dialog.visible = false;
                     game_state.editing_prim_id = None;
                 }
 
-                if ui.button("Cancel (ESC)").clicked() {
+                if ui.button("Cancel").clicked() {
                     push_revert(&mut game_state, &edit_dialog);
                     edit_dialog.visible = false;
                     game_state.editing_prim_id = None;
                 }
 
-                if !edit_dialog.is_new && ui.button("Delete (D)").clicked() {
+                if !edit_dialog.is_new && ui.button("Delete").clicked() {
                     if let Some(id) = edit_dialog.prim_id {
                         game_state.prims_to_delete.push(id);
                     }

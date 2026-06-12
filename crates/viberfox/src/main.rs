@@ -176,10 +176,13 @@ fn main() {
             systems::ui::send_prim_mutations.after(systems::ui::render_edit_dialog),
         ),
     )
-    // Phase 7: AI assistant panel
+    // Phase 7: AI assistant panel + top menu bar
     .add_systems(
         Update,
         (
+            // Top menu bar must reserve its space before the AI side panel lays out.
+            systems::ui::render_menu_bar.before(systems::ai_assistant::render_ai_panel),
+            systems::ui::toggle_ai_panel_shortcut,
             systems::ai_assistant::render_ai_panel,
             systems::ai_assistant::poll_ai_response
                 .after(systems::ai_assistant::render_ai_panel),
@@ -190,7 +193,6 @@ fn main() {
         Update,
         (
             systems::gizmo::handle_gizmo_mode_input,
-            systems::gizmo::render_gizmo_toolbar,
             systems::gizmo::render_gizmo_visuals,
             systems::gizmo::handle_gizmo_interaction,
         ),

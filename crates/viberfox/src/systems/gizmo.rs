@@ -55,41 +55,6 @@ pub fn handle_gizmo_mode_input(
     }
 }
 
-// ─── Mode toolbar ─────────────────────────────────────────────────────────────
-
-/// Small egui toolbar in the top-left corner, visible while a prim is selected.
-pub fn render_gizmo_toolbar(
-    mut egui: ResMut<EguiManager>,
-    mut gizmo_state: ResMut<GizmoState>,
-    selected_query: Query<(), With<Selected>>,
-) {
-    if selected_query.is_empty() {
-        return;
-    }
-
-    let ctx = egui.ctx_mut();
-    egui::Window::new("##gizmo_toolbar")
-        .title_bar(false)
-        .resizable(false)
-        .fixed_pos(egui::pos2(8.0, 8.0))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let is_t = gizmo_state.mode == GizmoMode::Translate;
-                let is_r = gizmo_state.mode == GizmoMode::Rotate;
-                let is_s = gizmo_state.mode == GizmoMode::Scale;
-                if ui.selectable_label(is_t, "⬆ Move (T)").clicked() {
-                    gizmo_state.mode = GizmoMode::Translate;
-                }
-                if ui.selectable_label(is_r, "↻ Rotate (R)").clicked() {
-                    gizmo_state.mode = GizmoMode::Rotate;
-                }
-                if ui.selectable_label(is_s, "⤢ Scale (S)").clicked() {
-                    gizmo_state.mode = GizmoMode::Scale;
-                }
-            });
-        });
-}
-
 // ─── Visual handles ───────────────────────────────────────────────────────────
 
 pub fn render_gizmo_visuals(

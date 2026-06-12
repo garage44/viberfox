@@ -14,10 +14,11 @@ use egui::Window;
 use crate::resources::AiAssistantState;
 use vibe_core::NetMessage;
 
-/// Top menu bar: `File ▸ Exit` and `View ▸ Show/Hide AI Panel`.
+/// Top menu bar: `File ▸ Exit` and `View ▸ AI Panel / Dev Panel`.
 pub fn render_menu_bar(
     mut egui: ResMut<EguiManager>,
     mut ai_state: ResMut<AiAssistantState>,
+    mut dev_state: ResMut<crate::resources::DevPanelState>,
     mut app_exit: EventWriter<AppExit>,
 ) {
     let ctx = egui.ctx_mut();
@@ -30,13 +31,22 @@ pub fn render_menu_bar(
                 }
             });
             ui.menu_button("View", |ui| {
-                let label = if ai_state.open {
+                let ai_label = if ai_state.open {
                     "Hide AI Panel"
                 } else {
                     "Show AI Panel"
                 };
-                if ui.button(label).clicked() {
+                if ui.button(ai_label).clicked() {
                     ai_state.open = !ai_state.open;
+                    ui.close_menu();
+                }
+                let dev_label = if dev_state.open {
+                    "Hide Dev Panel"
+                } else {
+                    "Show Dev Panel"
+                };
+                if ui.button(dev_label).clicked() {
+                    dev_state.open = !dev_state.open;
                     ui.close_menu();
                 }
             });
@@ -55,6 +65,76 @@ pub fn toggle_ai_panel_shortcut(
         keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
     if ctrl && shift && keyboard.just_pressed(KeyCode::KeyA) {
         ai_state.open = !ai_state.open;
+    }
+}
+
+/// Toggle the developer panel with Ctrl+Shift+D.
+pub fn toggle_dev_panel_shortcut(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut dev_state: ResMut<crate::resources::DevPanelState>,
+) {
+    let ctrl =
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    let shift =
+        keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    if ctrl && shift && keyboard.just_pressed(KeyCode::KeyD) {
+        dev_state.open = !dev_state.open;
+    }
+}
+
+/// Developer panel (View ▸ Dev Panel or Ctrl+Shift+D): a day/night slider that drives
+/// the sun position so the lighting can be tested at any time of day.
+pub fn render_dev_panel(
+    mut egui: ResMut<EguiManager>,
+    mut dev: ResMut<crate::resources::DevPanelState>,
+) {
+    if !dev.open {
+        return;
+    }
+    let ctx = egui.ctx_mut();
+    let mut open = true;
+    egui::Window::new("Dev — Lighting")
+        .open(&mut open)
+        .default_width(260.0)
+        .show(ctx, |ui| {
+            ui.label("Day / night cycle");
+            ui.add(
+                egui::Slider::new(&mut dev.time_of_day, 0.0..=24.0)
+                    .suffix(" h")
+                    .step_by(0.1),
+            );
+            let h = dev.time_of_day.floor() as i32 % 24;
+            let m = (dev.time_of_day.fract() * 60.0).floor() as i32;
+            ui.label(format!("Time: {:02}:{:02}", h, m));
+            ui.horizontal(|ui| {
+                if ui.button("Sunrise").clicked() {
+                    dev.time_of_day = 6.0;
+                }
+                if ui.button("Noon").clicked() {
+                    dev.time_of_day = 12.0;
+                }
+                if ui.button("Sunset").clicked() {
+                    dev.time_of_day = 18.0;
+                }
+                if ui.button("Midnight").clicked() {
+                    dev.time_of_day = 0.0;
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut dev.auto_cycle, "Quick cycle");
+                ui.add(
+                    egui::DragValue::new(&mut dev.cycle_seconds)
+                        .suffix(" s")
+                        .range(1.0..=120.0)
+                        .speed(0.5),
+                );
+            });
+        });
+    // Closing via the window's [x] only writes when it actually changed, to avoid
+    // marking the resource changed every frame (which would re-run the lighting update).
+    if !open && dev.open {
+        dev.open = false;
     }
 }
 

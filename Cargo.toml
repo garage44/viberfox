@@ -28,6 +28,7 @@ bevy = { version = "0.16", default-features = false, features = [
     "custom_cursor",
     "default_font",
     "hdr",
+    "jpeg",
     "multi_threaded",
     "png",
     "smaa_luts",

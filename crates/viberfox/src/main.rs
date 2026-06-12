@@ -1,7 +1,12 @@
 use bevy::asset::AssetPlugin;
 use bevy::log::LogPlugin;
 use bevy::pbr::light_consts::lux::AMBIENT_DAYLIGHT;
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
 use bevy::prelude::*;
+use bevy::render::mesh::MeshVertexBufferLayoutRef;
+use bevy::render::render_resource::{
+    AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
+};
 use bevy_atmosphere::prelude::*;
 use clap::Parser;
 use std::path::PathBuf;
@@ -15,8 +20,8 @@ mod utils;
 use components::Avatar;
 use resources::{
     AiAssistantState, AiConfig, AvatarState, CameraState, ConnectAddr, ContextMenuState, Database,
-    EditDialogState, GameState, LocalAvatarSimId, MarqueeState, MouseState, OsmTileUrlTemplate,
-    PrimTextureCache, TextureLibrary,
+    DevPanelState, EditDialogState, GameState, LocalAvatarSimId, MarqueeState, MouseState,
+    OsmTileUrlTemplate, PrimTextureCache, TextureLibrary,
 };
 use systems::egui_manager::EguiPlugin;
 use systems::*;
@@ -65,6 +70,7 @@ fn main() {
     )
     .add_plugins(EguiPlugin)
     .add_plugins(AtmospherePlugin)
+    .add_plugins(MaterialPlugin::<StarSkyMaterial>::default())
     .insert_resource(AtmosphereModel::default())
     .init_resource::<GameState>()
     .init_resource::<AvatarState>()
@@ -84,7 +90,8 @@ fn main() {
         model: std::env::var("ANTHROPIC_MODEL")
             .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string()),
     })
-    .init_resource::<AiAssistantState>();
+    .init_resource::<AiAssistantState>()
+    .init_resource::<DevPanelState>();
 
     if let Some(addr) = cli.connect {
         app.insert_resource(ConnectAddr(addr));
@@ -99,6 +106,7 @@ fn main() {
             systems::free_camera::setup_camera,
             spawn_avatar_entity,
             setup_sky,
+            setup_stars,
         ),
     )
     .add_systems(
@@ -189,6 +197,12 @@ fn main() {
             // Top menu bar must reserve its space before the AI side panel lays out.
             systems::ui::render_menu_bar.before(systems::ai_assistant::render_ai_panel),
             systems::ui::toggle_ai_panel_shortcut,
+            systems::ui::toggle_dev_panel_shortcut,
+            systems::ui::render_dev_panel,
+            advance_day_cycle.before(apply_day_night_cycle),
+            apply_day_night_cycle.after(systems::ui::render_dev_panel),
+            // Track the camera after it has been positioned this frame.
+            update_star_sky.after(systems::free_camera::camera_controls),
             systems::ai_assistant::render_ai_panel,
             systems::ai_assistant::poll_ai_response
                 .after(systems::ai_assistant::render_ai_panel),
@@ -226,21 +240,198 @@ fn spawn_avatar_entity(mut commands: Commands) {
     ));
 }
 
-fn setup_sky(mut commands: Commands, mut atmosphere: AtmosphereMut<Nishita>) {
-    let sun_position = Vec3::new(0.3, 0.8, 0.5).normalize();
-    atmosphere.sun_position = sun_position;
+fn setup_sky(
+    mut commands: Commands,
+    mut atmosphere: AtmosphereMut<Nishita>,
+    dev: Res<DevPanelState>,
+) {
+    // Start from the dev panel's time of day so the sky/sun match it from frame one
+    // (apply_day_night_cycle keeps them in sync afterwards).
+    let sun_dir = sun_direction(dev.time_of_day);
+    atmosphere.sun_position = sun_dir;
+    let day = sun_dir.y.max(0.0);
 
     commands.spawn((
         DirectionalLight {
-            illuminance: AMBIENT_DAYLIGHT,
+            illuminance: AMBIENT_DAYLIGHT * day,
             ..default()
         },
-        Transform::from_translation(Vec3::ZERO).looking_to(-sun_position, Vec3::Y),
+        Transform::from_translation(Vec3::ZERO).looking_to(-sun_dir, Vec3::Y),
     ));
 
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
-        brightness: 0.1,
+        brightness: 0.02 + 0.08 * day,
         affects_lightmapped_meshes: true,
     });
+}
+
+/// Marker for the world-aligned night-sky (star map) sphere.
+#[derive(Component)]
+struct StarSky;
+
+/// Brightness multiplier for the (fairly dim) star map so stars/Milky Way read clearly.
+const STAR_BRIGHTNESS: f32 = 3.0;
+
+/// Material that maps an equirectangular star map onto the surrounding sphere by view
+/// direction (see `shaders/starsky.wgsl`) — no UV-sphere poles or seams. Additive, with
+/// `brightness` driven by the night factor.
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+struct StarSkyMaterial {
+    #[uniform(0)]
+    brightness: f32,
+    #[texture(1)]
+    #[sampler(2)]
+    texture: Handle<Image>,
+}
+
+impl Material for StarSkyMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/starsky.wgsl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Add
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline<Self>,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        use bevy::render::render_resource::{
+            BlendComponent, BlendFactor, BlendOperation, BlendState,
+        };
+        // Camera is inside the sphere; render its interior.
+        descriptor.primitive.cull_mode = None;
+        // Don't write depth — it must not occlude the atmosphere or anything else.
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_write_enabled = false;
+        }
+        // Force pure additive blending (src + dst): black gaps add nothing, stars add light.
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            if let Some(Some(target)) = fragment.targets.get_mut(0) {
+                target.blend = Some(BlendState {
+                    color: BlendComponent {
+                        src_factor: BlendFactor::One,
+                        dst_factor: BlendFactor::One,
+                        operation: BlendOperation::Add,
+                    },
+                    alpha: BlendComponent {
+                        src_factor: BlendFactor::Zero,
+                        dst_factor: BlendFactor::One,
+                        operation: BlendOperation::Add,
+                    },
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sun-arc angle for a time of day (0–24 h): 0 = sunrise (east), π/2 = noon (up),
+/// π = sunset (west), −π/2 = midnight (below).
+fn day_angle(hours: f32) -> f32 {
+    let t = (hours / 24.0).rem_euclid(1.0);
+    (t - 0.25) * std::f32::consts::TAU
+}
+
+/// Unit direction toward the sun for a time of day.
+fn sun_direction(hours: f32) -> Vec3 {
+    let a = day_angle(hours);
+    Vec3::new(a.cos(), a.sin(), 0.2).normalize()
+}
+
+/// When the dev panel's "Quick cycle" toggle is on, advances the time of day smoothly,
+/// looping the full 24 h over `cycle_seconds`.
+fn advance_day_cycle(time: Res<Time>, mut dev: ResMut<DevPanelState>) {
+    if !dev.auto_cycle {
+        return;
+    }
+    let speed = 24.0 / dev.cycle_seconds.max(0.1); // hours per real second
+    dev.time_of_day = (dev.time_of_day + time.delta_secs() * speed).rem_euclid(24.0);
+}
+
+/// Drives the sun direction, sun light intensity, and ambient brightness from the dev
+/// panel's time-of-day slider (Ctrl+Shift+D). Runs only when the value changes.
+fn apply_day_night_cycle(
+    dev: Res<DevPanelState>,
+    mut atmosphere: AtmosphereMut<Nishita>,
+    mut sun: Query<(&mut Transform, &mut DirectionalLight)>,
+    mut ambient: ResMut<AmbientLight>,
+) {
+    if !dev.is_changed() {
+        return;
+    }
+    let sun_dir = sun_direction(dev.time_of_day);
+    atmosphere.sun_position = sun_dir;
+
+    let day = sun_dir.y.max(0.0); // 0 at/below the horizon, → 1 overhead
+    for (mut tf, mut light) in sun.iter_mut() {
+        *tf = Transform::from_translation(Vec3::ZERO).looking_to(-sun_dir, Vec3::Y);
+        light.illuminance = AMBIENT_DAYLIGHT * day;
+    }
+    ambient.brightness = 0.02 + 0.08 * day;
+}
+
+/// Spawns the star-map night sky: a box centred on the viewer whose custom material
+/// samples the equirectangular star map by view direction (no UV-sphere poles or seams).
+/// `update_star_sky` keeps it on the camera and fades it with the night factor.
+fn setup_stars(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StarSkyMaterial>>,
+    asset_server: Res<AssetServer>,
+) {
+    // Repeat addressing so the longitude seam (where the sampled U wraps 1→0 behind the
+    // viewer) is continuous. The mesh UVs are unused — the shader samples by direction —
+    // so a low-poly sphere is fine; it only needs to enclose the camera.
+    let texture = asset_server.load_with_settings(
+        "sky/stars_milky_way_8k.jpg",
+        |s: &mut bevy::image::ImageLoaderSettings| {
+            s.sampler = crate::systems::rendering::repeat_linear_sampler();
+        },
+    );
+    // A box just inside the atmosphere's skybox cube (faces ~705 at far=1000) — a smaller
+    // concentric cube is uniformly in front of it in every direction, so no part pokes
+    // through. The shader samples by view direction, so the box shape is irrelevant to the
+    // mapping; this is just a cheap 12-triangle shell to enclose the camera.
+    let mesh = meshes.add(Cuboid::from_length(1300.0).mesh());
+    let material = materials.add(StarSkyMaterial {
+        brightness: 0.0, // set each frame from the night factor; starts invisible (day)
+        texture,
+    });
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        Transform::default(),
+        bevy::pbr::NotShadowCaster,
+        bevy::pbr::NotShadowReceiver,
+        StarSky,
+    ));
+}
+
+/// Keeps the star box centred on the camera (so it reads as infinitely far) and fades
+/// it in after sunset by driving the material's `brightness` from the night factor.
+fn update_star_sky(
+    dev: Res<DevPanelState>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut star: Query<(&mut Transform, &MeshMaterial3d<StarSkyMaterial>), With<StarSky>>,
+    mut materials: ResMut<Assets<StarSkyMaterial>>,
+) {
+    let Ok(cam) = camera.single() else {
+        return;
+    };
+    let Ok((mut tf, mat_handle)) = star.single_mut() else {
+        return;
+    };
+    tf.translation = cam.translation();
+
+    // Fade in once the sun is below the horizon; full when it's well below (dark sky).
+    let elevation = sun_direction(dev.time_of_day).y;
+    let night = ((-0.05 - elevation) / 0.2).clamp(0.0, 1.0);
+    if let Some(mat) = materials.get_mut(&mat_handle.0) {
+        mat.brightness = night * STAR_BRIGHTNESS;
+    }
 }

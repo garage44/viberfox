@@ -53,6 +53,30 @@ pub struct Database {
     pub conn: Mutex<Connection>,
 }
 
+/// Developer tools panel (toggled with Ctrl+Shift+D, or View ▸ Dev Panel). Currently
+/// exposes a day/night slider that drives the sun for testing the lighting.
+#[derive(Resource)]
+pub struct DevPanelState {
+    pub open: bool,
+    /// Time of day in hours, 0.0–24.0 (12.0 = noon).
+    pub time_of_day: f32,
+    /// When true, `time_of_day` advances automatically, looping the full 24h.
+    pub auto_cycle: bool,
+    /// Real seconds for one full day/night loop when `auto_cycle` is on.
+    pub cycle_seconds: f32,
+}
+
+impl Default for DevPanelState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            time_of_day: 12.0,
+            auto_cycle: false,
+            cycle_seconds: 10.0,
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct GameState {
     pub selected_prim_id: Option<i64>,

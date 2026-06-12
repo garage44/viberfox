@@ -244,6 +244,12 @@ pub fn camera_controls(
                 move_direction -= Vec3::Y;
             }
 
+            // Suppress keyboard-driven movement while the UI owns the keyboard (text
+            // field focused or a Ctrl chord like Ctrl+Shift+A).
+            if egui_manager.ui_owns_keyboard(false, &keyboard_input) {
+                move_direction = Vec3::ZERO;
+            }
+
             // Apply movement
             if move_direction.length() > 0.0 {
                 move_direction = move_direction.normalize();

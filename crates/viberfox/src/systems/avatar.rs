@@ -273,9 +273,17 @@ pub fn handle_avatar_movement(
     mut avatar_query: Query<&mut Transform, With<Avatar>>,
     mut avatar_state: ResMut<AvatarState>,
     camera_state: Res<crate::resources::CameraState>,
+    egui_manager: Res<crate::systems::egui_manager::EguiManager>,
+    edit_dialog: Res<crate::resources::EditDialogState>,
 ) {
     // Don't move avatar if in free camera mode (camera handles movement)
     if camera_state.mode == crate::resources::CameraMode::Free {
+        avatar_state.is_walking = false;
+        return;
+    }
+    // Don't move while the UI owns the keyboard (text field focused, edit dialog open,
+    // or a Ctrl chord like Ctrl+Shift+A); otherwise WASD/S leak into avatar movement.
+    if egui_manager.ui_owns_keyboard(edit_dialog.visible, &keyboard_input) {
         avatar_state.is_walking = false;
         return;
     }

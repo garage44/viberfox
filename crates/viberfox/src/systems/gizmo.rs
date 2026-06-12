@@ -45,7 +45,13 @@ pub struct GizmoState {
 pub fn handle_gizmo_mode_input(
     mut gizmo_state: ResMut<GizmoState>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    egui_manager: Res<EguiManager>,
 ) {
+    // Ignore T/R/S when a text field is focused or a Ctrl chord is held; stays live
+    // while the edit dialog is open (pass `false`) so mode switching works during editing.
+    if egui_manager.ui_owns_keyboard(false, &keyboard) {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::KeyT) {
         gizmo_state.mode = GizmoMode::Translate;
     } else if keyboard.just_pressed(KeyCode::KeyR) {

@@ -516,6 +516,8 @@ pub fn send_network_intent(
     online: Option<Res<OnlineSession>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     camera_state: Res<crate::resources::CameraState>,
+    egui_manager: Res<super::egui_manager::EguiManager>,
+    edit_dialog: Res<crate::resources::EditDialogState>,
 ) {
     let Some(sess) = online else {
         return;
@@ -524,17 +526,22 @@ pub fn send_network_intent(
         return;
     }
 
-    let move_forward =
-        keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp);
-    let move_backward =
-        keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown);
-    let move_left =
-        keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft);
-    let move_right =
-        keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight);
-    let fly_up = keyboard_input.pressed(KeyCode::Space);
-    let fly_down = keyboard_input.pressed(KeyCode::ShiftLeft)
-        || keyboard_input.pressed(KeyCode::ShiftRight);
+    // When the UI owns the keyboard (text field, edit dialog, Ctrl chord), send a zero
+    // intent rather than skipping: the sim persists the last velocity, so we must
+    // actively tell it to stop instead of leaving the avatar drifting.
+    let blocked = egui_manager.ui_owns_keyboard(edit_dialog.visible, &keyboard_input);
+    let move_forward = !blocked
+        && (keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp));
+    let move_backward = !blocked
+        && (keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown));
+    let move_left = !blocked
+        && (keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft));
+    let move_right = !blocked
+        && (keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight));
+    let fly_up = !blocked && keyboard_input.pressed(KeyCode::Space);
+    let fly_down = !blocked
+        && (keyboard_input.pressed(KeyCode::ShiftLeft)
+            || keyboard_input.pressed(KeyCode::ShiftRight));
 
     let az = camera_state.azimuth;
     let v = wish_dir_camera_relative(az, move_forward, move_backward, move_left, move_right);

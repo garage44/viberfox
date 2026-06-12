@@ -59,6 +59,22 @@ impl EguiManager {
     pub fn ctx_mut(&mut self) -> &mut egui::Context {
         &mut self.ctx
     }
+
+    /// True when keyboard input belongs to the UI and the game (avatar movement,
+    /// gizmo-mode keys) must ignore it: a text field is focused, the prim edit dialog
+    /// is open, or a Ctrl chord is held (e.g. Ctrl+Shift+A toggling the AI panel).
+    /// Pass `edit_dialog_open = false` for actions that should stay live while editing
+    /// a prim (e.g. the gizmo Move/Rotate/Scale keys).
+    pub fn ui_owns_keyboard(
+        &self,
+        edit_dialog_open: bool,
+        keyboard: &ButtonInput<KeyCode>,
+    ) -> bool {
+        self.ctx.wants_keyboard_input()
+            || edit_dialog_open
+            || keyboard.pressed(KeyCode::ControlLeft)
+            || keyboard.pressed(KeyCode::ControlRight)
+    }
 }
 
 // ─── Extracted render data ────────────────────────────────────────────────────

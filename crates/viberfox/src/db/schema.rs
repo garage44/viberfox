@@ -82,6 +82,22 @@ pub fn init_database(db_path: &str) -> Result<Connection> {
     ] {
         let _ = conn.execute(stmt, []);
     }
+    // Add texture surface columns (transparency / glow / full-bright / repeats /
+    // flip / rotation / offset) — migration for existing dbs (protocol v8).
+    for stmt in [
+        "ALTER TABLE prims ADD COLUMN alpha REAL NOT NULL DEFAULT 1.0",
+        "ALTER TABLE prims ADD COLUMN glow REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN full_bright INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE prims ADD COLUMN repeat_u REAL NOT NULL DEFAULT 1.0",
+        "ALTER TABLE prims ADD COLUMN repeat_v REAL NOT NULL DEFAULT 1.0",
+        "ALTER TABLE prims ADD COLUMN flip_u INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE prims ADD COLUMN flip_v INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE prims ADD COLUMN texture_rotation REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN offset_u REAL NOT NULL DEFAULT 0.0",
+        "ALTER TABLE prims ADD COLUMN offset_v REAL NOT NULL DEFAULT 0.0",
+    ] {
+        let _ = conn.execute(stmt, []);
+    }
 
     // Create index on region_id
     conn.execute(
@@ -171,6 +187,7 @@ pub struct PrimRow {
     pub top_shear_y: f32,
     pub slice_begin: f32,
     pub slice_end: f32,
+    pub surface: vibe_core::PrimSurface,
     pub created_at: String,
     pub updated_at: String,
 }

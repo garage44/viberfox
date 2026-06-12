@@ -2,7 +2,57 @@ use anyhow::Context;
 use glam::Vec3;
 use rusqlite::{Connection, OptionalExtension};
 use vibe_core::world::{lat_lng_to_tile, REGION_ZOOM_LEVEL};
-use vibe_core::{PrimDto, RegionDto};
+use vibe_core::{PrimDto, PrimSurface, RegionDto};
+
+/// Column list (in order) for selecting a full [`PrimDto`]; consumed by [`row_to_prim`].
+const PRIM_COLUMNS: &str = "id, region_id, name, shape, \
+     position_x, position_y, position_z, \
+     rotation_x, rotation_y, rotation_z, \
+     scale_x, scale_y, scale_z, \
+     color_r, color_g, color_b, texture_id, \
+     path_cut_begin, path_cut_end, hollow, \
+     twist_begin, twist_end, taper_x, taper_y, \
+     top_shear_x, top_shear_y, slice_begin, slice_end, \
+     alpha, glow, full_bright, repeat_u, repeat_v, flip_u, flip_v, \
+     texture_rotation, offset_u, offset_v";
+
+/// Maps a row selected with [`PRIM_COLUMNS`] (in order) into a [`PrimDto`].
+fn row_to_prim(row: &rusqlite::Row) -> rusqlite::Result<PrimDto> {
+    Ok(PrimDto {
+        id: row.get(0)?,
+        region_id: row.get(1)?,
+        name: row.get(2)?,
+        shape: row.get(3)?,
+        position: Vec3::new(row.get(4)?, row.get(5)?, row.get(6)?),
+        rotation: Vec3::new(row.get(7)?, row.get(8)?, row.get(9)?),
+        scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
+        color: [row.get(13)?, row.get(14)?, row.get(15)?],
+        texture_id: row.get(16)?,
+        path_cut_begin: row.get(17)?,
+        path_cut_end: row.get(18)?,
+        hollow: row.get(19)?,
+        twist_begin: row.get(20)?,
+        twist_end: row.get(21)?,
+        taper_x: row.get(22)?,
+        taper_y: row.get(23)?,
+        top_shear_x: row.get(24)?,
+        top_shear_y: row.get(25)?,
+        slice_begin: row.get(26)?,
+        slice_end: row.get(27)?,
+        surface: PrimSurface {
+            alpha: row.get(28)?,
+            glow: row.get(29)?,
+            full_bright: row.get(30)?,
+            repeat_u: row.get(31)?,
+            repeat_v: row.get(32)?,
+            flip_u: row.get(33)?,
+            flip_v: row.get(34)?,
+            rotation: row.get(35)?,
+            offset_u: row.get(36)?,
+            offset_v: row.get(37)?,
+        },
+    })
+}
 
 mod embedded {
     use refinery::embed_migrations;
@@ -66,36 +116,10 @@ pub fn load_world(conn: &Connection) -> anyhow::Result<(Vec<RegionDto>, Vec<Prim
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, region_id, name, shape, position_x, position_y, position_z,
-                rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z,
-                color_r, color_g, color_b, texture_id FROM prims ORDER BY id",
-    )?;
+    let sql = format!("SELECT {PRIM_COLUMNS} FROM prims ORDER BY id");
+    let mut stmt = conn.prepare(&sql)?;
     let prims = stmt
-        .query_map([], |row| {
-            Ok(PrimDto {
-                id: row.get(0)?,
-                region_id: row.get(1)?,
-                name: row.get(2)?,
-                shape: row.get(3)?,
-                position: Vec3::new(row.get(4)?, row.get(5)?, row.get(6)?),
-                rotation: Vec3::new(row.get(7)?, row.get(8)?, row.get(9)?),
-                scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
-                color: [row.get(13)?, row.get(14)?, row.get(15)?],
-                texture_id: row.get(16)?,
-                path_cut_begin: 0.0,
-                path_cut_end: 1.0,
-                hollow: 0.0,
-                twist_begin: 0.0,
-                twist_end: 0.0,
-                taper_x: 0.0,
-                taper_y: 0.0,
-                top_shear_x: 0.0,
-                top_shear_y: 0.0,
-                slice_begin: 0.0,
-                slice_end: 1.0,
-            })
-        })?
+        .query_map([], row_to_prim)?
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok((regions, prims))
@@ -168,6 +192,7 @@ pub fn update_prim(
     color: [f32; 3],
     texture_id: Option<String>,
     name: &str,
+    surface: PrimSurface,
 ) -> anyhow::Result<Option<PrimDto>> {
     // Check if prim exists first
     let exists: bool = conn.query_row(
@@ -189,11 +214,17 @@ pub fn update_prim(
             color_r = ?11, color_g = ?12, color_b = ?13,
             texture_id = ?14,
             name = ?15,
+            alpha = ?16, glow = ?17, full_bright = ?18,
+            repeat_u = ?19, repeat_v = ?20, flip_u = ?21, flip_v = ?22,
+            texture_rotation = ?23, offset_u = ?24, offset_v = ?25,
             updated_at = datetime('now')
          WHERE id = ?1",
         rusqlite::params![
             prim_id, position.x, position.y, position.z, rotation.x, rotation.y, rotation.z,
             scale.x, scale.y, scale.z, color[0], color[1], color[2], texture_id, name,
+            surface.alpha, surface.glow, surface.full_bright,
+            surface.repeat_u, surface.repeat_v, surface.flip_u, surface.flip_v,
+            surface.rotation, surface.offset_u, surface.offset_v,
         ],
     )?;
 
@@ -223,39 +254,11 @@ pub fn delete_prim(conn: &Connection, prim_id: i64) -> anyhow::Result<bool> {
 
 /// Helper: retrieve a prim by id (internal use)  (ADR-017 Phase 2)
 fn select_prim_by_id(conn: &Connection, prim_id: i64) -> anyhow::Result<Option<PrimDto>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, region_id, name, shape, position_x, position_y, position_z,
-                rotation_x, rotation_y, rotation_z, scale_x, scale_y, scale_z,
-                color_r, color_g, color_b, texture_id FROM prims WHERE id = ?1",
-    )?;
-
+    let sql = format!("SELECT {PRIM_COLUMNS} FROM prims WHERE id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
     let prim = stmt
-        .query_row(rusqlite::params![prim_id], |row| {
-            Ok(PrimDto {
-                id: row.get(0)?,
-                region_id: row.get(1)?,
-                name: row.get(2)?,
-                shape: row.get(3)?,
-                position: Vec3::new(row.get(4)?, row.get(5)?, row.get(6)?),
-                rotation: Vec3::new(row.get(7)?, row.get(8)?, row.get(9)?),
-                scale: Vec3::new(row.get(10)?, row.get(11)?, row.get(12)?),
-                color: [row.get(13)?, row.get(14)?, row.get(15)?],
-                texture_id: row.get(16)?,
-                path_cut_begin: 0.0,
-                path_cut_end: 1.0,
-                hollow: 0.0,
-                twist_begin: 0.0,
-                twist_end: 0.0,
-                taper_x: 0.0,
-                taper_y: 0.0,
-                top_shear_x: 0.0,
-                top_shear_y: 0.0,
-                slice_begin: 0.0,
-                slice_end: 1.0,
-            })
-        })
+        .query_row(rusqlite::params![prim_id], row_to_prim)
         .optional()?;
-
     Ok(prim)
 }
 
@@ -335,6 +338,7 @@ mod tests {
             [1.0, 0.0, 0.0],
             Some("brick".to_string()),
             "Updated Prim",
+            PrimSurface::default(),
         )?
         .ok_or_else(|| anyhow::anyhow!("prim not found after update"))?;
 
@@ -364,6 +368,7 @@ mod tests {
             [0.5, 0.5, 0.5],
             None,
             "test",
+            PrimSurface::default(),
         )?;
 
         assert!(result.is_none());
@@ -427,6 +432,7 @@ mod tests {
             [0.5, 0.5, 0.5],
             Some("grass".to_string()),
             "Prim",
+            PrimSurface::default(),
         )?
         .ok_or_else(|| anyhow::anyhow!("prim not found"))?;
 
@@ -463,6 +469,7 @@ mod tests {
             [1.0, 0.0, 0.0],
             None,
             "Red Box",
+            PrimSurface::default(),
         )?;
 
         // Delete the other

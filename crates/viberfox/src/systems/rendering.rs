@@ -4,11 +4,58 @@ use crate::systems::tile_loader::{RegionTile, TileKey};
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::math::Affine2;
 use bevy::render::render_asset::RenderAssetUsages;
 use vibe_core::world::REGION_SIZE_METERS;
+use vibe_core::PrimSurface;
 
 #[derive(Component)]
 pub struct RegionMesh;
+
+/// Linear-filtered sampler with repeat addressing, so texture repeats (`repeat_u/v > 1`)
+/// tile instead of clamping at the edge. Used for all prim textures.
+pub fn repeat_linear_sampler() -> ImageSampler {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        address_mode_w: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    })
+}
+
+/// Build the UV transform for a prim's texture from its surface params
+/// (repeats per face = UV scale, flip = negative scale, rotation, offset).
+pub fn surface_uv_transform(s: &PrimSurface) -> Affine2 {
+    let mut scale = Vec2::new(s.repeat_u, s.repeat_v);
+    if s.flip_u {
+        scale.x = -scale.x;
+    }
+    if s.flip_v {
+        scale.y = -scale.y;
+    }
+    Affine2::from_scale_angle_translation(
+        scale,
+        s.rotation.to_radians(),
+        Vec2::new(s.offset_u, s.offset_v),
+    )
+}
+
+/// Apply a prim's surface params onto its material: overall transparency (base-color
+/// alpha + blend mode), glow (emissive), full-bright (unlit), and the UV transform.
+/// `base_color` is the prim's untinted RGB; alpha comes from the surface.
+pub fn apply_surface(mat: &mut StandardMaterial, base_color: Color, s: &PrimSurface) {
+    let lin = base_color.to_linear();
+    mat.base_color = Color::linear_rgba(lin.red, lin.green, lin.blue, s.alpha);
+    mat.alpha_mode = if s.alpha < 0.999 {
+        AlphaMode::Blend
+    } else {
+        AlphaMode::Opaque
+    };
+    mat.emissive = LinearRgba::rgb(lin.red * s.glow, lin.green * s.glow, lin.blue * s.glow);
+    mat.unlit = s.full_bright;
+    mat.uv_transform = surface_uv_transform(s);
+}
 
 #[derive(Component)]
 pub struct PrimMesh;
@@ -150,11 +197,13 @@ pub fn spawn_prims(
             .and_then(|id| texture_cache.handles.get(id))
             .cloned();
 
-        let material_handle = materials.add(StandardMaterial {
+        let mut material = StandardMaterial {
             base_color: prim.color,
             base_color_texture,
             ..default()
-        });
+        };
+        apply_surface(&mut material, prim.color, &prim.surface);
+        let material_handle = materials.add(material);
 
         commands.entity(entity).insert((
             Mesh3d(mesh_handle),

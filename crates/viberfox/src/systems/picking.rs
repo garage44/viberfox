@@ -328,7 +328,7 @@ pub fn highlight_selected_prim(
                 (brightened.red * 1.5).min(1.0),
                 (brightened.green * 1.5).min(1.0),
                 (brightened.blue * 1.5).min(1.0),
-                brightened.alpha,
+                prim.surface.alpha,
             );
             material.emissive = LinearRgba::new(0.2, 0.3, 0.5, 1.0);
         }
@@ -346,8 +346,8 @@ pub fn unhighlight_deselected_prim(
     for entity in deselected.read() {
         if let Ok((prim, material_handle)) = query.get(entity) {
             if let Some(material) = materials.get_mut(&material_handle.0) {
-                material.base_color = prim.color;
-                material.emissive = LinearRgba::BLACK;
+                // Restore the full surface (alpha/glow/full-bright/uv), not just RGB.
+                crate::systems::rendering::apply_surface(material, prim.color, &prim.surface);
             }
         }
     }

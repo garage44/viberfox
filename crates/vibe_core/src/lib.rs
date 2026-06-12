@@ -8,7 +8,7 @@ pub mod yaw;
 pub use error::ProtocolError;
 pub use protocol::{
     decode_app_frame, decode_message, encode_app_frame, encode_message, message_kind,
-    message_request_id, AvatarStateDto, MessageKind, NetMessage, PrimDto, RegionDto,
+    message_request_id, AvatarStateDto, MessageKind, NetMessage, PrimDto, PrimSurface, RegionDto,
     TextureEntry, PROTOCOL_VERSION,
 };
 pub use world::{

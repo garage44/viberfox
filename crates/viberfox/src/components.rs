@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use vibe_core::PrimSurface;
 
 #[derive(Component, Debug, Clone)]
 #[allow(dead_code)] // latitude/longitude kept for future geo display
@@ -43,6 +44,8 @@ pub struct Prim {
     /// Slice: trims the path to the fraction [begin, end] (default 0.0/1.0).
     pub slice_begin: f32,
     pub slice_end: f32,
+    /// Texture surface params (transparency, glow, full-bright, repeats, rotation, offset).
+    pub surface: PrimSurface,
 }
 
 /// Marker: prim's mesh needs to be rebuilt (shape/path-cut/hollow changed).

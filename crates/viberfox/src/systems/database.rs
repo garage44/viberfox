@@ -120,6 +120,8 @@ pub fn load_prims(
              path_cut_begin, path_cut_end, hollow, \
              twist_begin, twist_end, taper_x, taper_y, \
              top_shear_x, top_shear_y, slice_begin, slice_end, \
+             alpha, glow, full_bright, repeat_u, repeat_v, flip_u, flip_v, \
+             texture_rotation, offset_u, offset_v, \
              created_at, updated_at \
              FROM prims ORDER BY created_at DESC",
         ) {
@@ -160,8 +162,20 @@ pub fn load_prims(
                 top_shear_y: row.get::<_, Option<f64>>(25)?.map(|v| v as f32).unwrap_or(0.0),
                 slice_begin: row.get::<_, Option<f64>>(26)?.map(|v| v as f32).unwrap_or(0.0),
                 slice_end: row.get::<_, Option<f64>>(27)?.map(|v| v as f32).unwrap_or(1.0),
-                created_at: row.get(28)?,
-                updated_at: row.get(29)?,
+                surface: vibe_core::PrimSurface {
+                    alpha: row.get::<_, Option<f64>>(28)?.map(|v| v as f32).unwrap_or(1.0),
+                    glow: row.get::<_, Option<f64>>(29)?.map(|v| v as f32).unwrap_or(0.0),
+                    full_bright: row.get::<_, Option<i64>>(30)?.map(|v| v != 0).unwrap_or(false),
+                    repeat_u: row.get::<_, Option<f64>>(31)?.map(|v| v as f32).unwrap_or(1.0),
+                    repeat_v: row.get::<_, Option<f64>>(32)?.map(|v| v as f32).unwrap_or(1.0),
+                    flip_u: row.get::<_, Option<i64>>(33)?.map(|v| v != 0).unwrap_or(false),
+                    flip_v: row.get::<_, Option<i64>>(34)?.map(|v| v != 0).unwrap_or(false),
+                    rotation: row.get::<_, Option<f64>>(35)?.map(|v| v as f32).unwrap_or(0.0),
+                    offset_u: row.get::<_, Option<f64>>(36)?.map(|v| v as f32).unwrap_or(0.0),
+                    offset_v: row.get::<_, Option<f64>>(37)?.map(|v| v as f32).unwrap_or(0.0),
+                },
+                created_at: row.get(38)?,
+                updated_at: row.get(39)?,
             })
         });
 
@@ -198,6 +212,7 @@ pub fn load_prims(
                         top_shear_y: prim.top_shear_y,
                         slice_begin: prim.slice_begin,
                         slice_end: prim.slice_end,
+                        surface: prim.surface,
                     },
                     Transform::from_xyz(prim.position_x, prim.position_y, prim.position_z)
                         .with_rotation(Quat::from_euler(
@@ -263,13 +278,15 @@ pub fn load_local_textures(
                         texture_lib.egui_handles.insert(id.clone(), egui_handle);
 
                         // Bevy Image for material texturing.
-                        let bevy_img = Image::new(
+                        let mut bevy_img = Image::new(
                             Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                             TextureDimension::D2,
                             raw,
                             TextureFormat::Rgba8UnormSrgb,
                             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
                         );
+                        // Repeat addressing so texture repeats (repeat_u/v > 1) tile.
+                        bevy_img.sampler = crate::systems::rendering::repeat_linear_sampler();
                         let handle = images.add(bevy_img);
                         texture_cache.handles.insert(id.clone(), handle);
                         entries.push(TextureEntry { id, name });

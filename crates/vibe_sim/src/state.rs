@@ -1,7 +1,7 @@
 use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use vibe_core::{snap_yaw_continuation, AvatarStateDto, NetMessage, PrimDto, RegionDto};
+use vibe_core::{snap_yaw_continuation, AvatarStateDto, NetMessage, PrimDto, PrimSurface, RegionDto};
 
 struct AvatarSim {
     position: Vec3,
@@ -230,6 +230,7 @@ impl SimWorld {
         color: [f32; 3],
         texture_id: Option<String>,
         name: &str,
+        surface: PrimSurface,
     ) -> Result<PrimDto, String> {
         // Call db::update_prim with a minimal lock
         let prim = {
@@ -246,6 +247,7 @@ impl SimWorld {
                 color,
                 texture_id,
                 name,
+                surface,
             )
             .map_err(|e| format!("update_prim failed: {}", e))?
             .ok_or_else(|| format!("prim {} not found", prim_id))?

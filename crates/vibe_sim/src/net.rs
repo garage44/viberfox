@@ -139,9 +139,9 @@ pub async fn handle_connection(
                                     }
                                 }
                             }
-                            NetMessage::UpdatePrim { request_id, prim_id, position, rotation, scale, color, texture_id, name } => {
+                            NetMessage::UpdatePrim { request_id, prim_id, position, rotation, scale, color, texture_id, name, surface } => {
                                 let mut w = world.write().await;
-                                match w.update_prim(prim_id, position, rotation, scale, color, texture_id, &name) {
+                                match w.update_prim(prim_id, position, rotation, scale, color, texture_id, &name, surface) {
                                     Ok(prim) => {
                                         // Broadcast PrimUpsert to all clients
                                         let broadcast_msg = encode_app_frame(&NetMessage::PrimUpsert { prim })?;
@@ -365,6 +365,7 @@ mod tests {
                 [1.0, 0.0, 0.0],
                 Some("brick".to_string()),
                 "Updated Prim",
+                vibe_core::PrimSurface::default(),
             )
         };
 

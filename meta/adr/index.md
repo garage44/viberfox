@@ -19,3 +19,4 @@
 | [015](./015-workspace-module-boundaries.md) | Workspace Module and Crate Boundaries | Proposed | workspace, crates, architecture |
 | [016](./016-authentication-and-session-model-v0.md) | Authentication and Server Session Model (v0) | Proposed | auth, session, security, networking, protocol, cli, ops |
 | [017](./017/README.md) | Prim Authoring and Editing (v0) | Proposed | authoring, prims, ui, protocol, persistence, textures, replication |
+| [018](./018-prim-texture-surface-params.md) | Prim Texture Surface Parameters | Proposed | prims, textures, ui, protocol, persistence, rendering |

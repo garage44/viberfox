@@ -66,6 +66,8 @@ pub fn render_context_menu(
                             edit_dialog.path_cut_begin = prim.path_cut_begin;
                             edit_dialog.path_cut_end = prim.path_cut_end;
                             edit_dialog.hollow = prim.hollow;
+                            edit_dialog.surface = prim.surface;
+                            edit_dialog.repeats_per_meter = 0.0;
                             edit_dialog.warp = crate::resources::PrimWarp {
                                 twist_begin: prim.twist_begin,
                                 twist_end: prim.twist_end,
@@ -88,6 +90,7 @@ pub fn render_context_menu(
                             edit_dialog.original_path_cut_end = prim.path_cut_end;
                             edit_dialog.original_hollow = prim.hollow;
                             edit_dialog.original_warp = edit_dialog.warp;
+                            edit_dialog.original_surface = prim.surface;
                             edit_dialog.texture_picker_open = false;
                             edit_dialog.visible = true;
                             break;
@@ -115,6 +118,8 @@ pub fn render_context_menu(
                     edit_dialog.path_cut_end = 1.0;
                     edit_dialog.hollow = 0.0;
                     edit_dialog.warp = crate::resources::PrimWarp::default();
+                    edit_dialog.surface = vibe_core::PrimSurface::default();
+                    edit_dialog.repeats_per_meter = 0.0;
                     let hit = context_menu.hit_point;
                     // Offset Y so the prim rests on the surface instead of being centred in it.
                     edit_dialog.position = [hit.x, hit.y + 0.5, hit.z];
@@ -449,7 +454,112 @@ pub fn render_edit_dialog(
                                 }
                             });
                             ui.end_row();
+
+                            // Transparency (SL "Transparency %": 0 = opaque, higher = more see-through).
+                            ui.label("Transparency");
+                            let mut transparency = (1.0 - edit_dialog.surface.alpha) * 100.0;
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut transparency)
+                                        .speed(0.5)
+                                        .range(0.0..=100.0)
+                                        .suffix(" %")
+                                        .max_decimals(1),
+                                )
+                                .changed()
+                            {
+                                edit_dialog.surface.alpha =
+                                    (1.0 - transparency / 100.0).clamp(0.0, 1.0);
+                            }
+                            ui.end_row();
+
+                            // Glow (0–1; emissive surface glow).
+                            ui.label("Glow");
+                            ui.add(
+                                egui::DragValue::new(&mut edit_dialog.surface.glow)
+                                    .speed(0.01)
+                                    .range(0.0..=1.0)
+                                    .max_decimals(2),
+                            );
+                            ui.end_row();
+
+                            ui.label("Full Bright");
+                            ui.checkbox(&mut edit_dialog.surface.full_bright, "");
+                            ui.end_row();
                         });
+
+                    ui.separator();
+
+                    // Repeats Per Face (tiling count per axis, with optional flip).
+                    ui.label("Repeats Per Face");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.surface.repeat_u)
+                                .prefix("U ")
+                                .speed(0.05)
+                                .range(0.0..=100.0)
+                                .max_decimals(3),
+                        );
+                        ui.checkbox(&mut edit_dialog.surface.flip_u, "Flip");
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.surface.repeat_v)
+                                .prefix("V ")
+                                .speed(0.05)
+                                .range(0.0..=100.0)
+                                .max_decimals(3),
+                        );
+                        ui.checkbox(&mut edit_dialog.surface.flip_v, "Flip");
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Texture rotation (degrees, −360..360).
+                    ui.label("Rotation (degrees)");
+                    ui.add(
+                        egui::DragValue::new(&mut edit_dialog.surface.rotation)
+                            .speed(1.0)
+                            .range(-360.0..=360.0)
+                            .suffix("°"),
+                    );
+
+                    ui.add_space(4.0);
+
+                    // Repeats Per Meter: derives per-face repeats from object size on Apply.
+                    ui.label("Repeats Per Meter");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.repeats_per_meter)
+                                .speed(0.05)
+                                .range(0.0..=10.0)
+                                .max_decimals(3),
+                        );
+                        if ui.button("Apply").clicked() && edit_dialog.repeats_per_meter > 0.0 {
+                            let rpm = edit_dialog.repeats_per_meter;
+                            edit_dialog.surface.repeat_u = rpm * edit_dialog.scale[0];
+                            edit_dialog.surface.repeat_v = rpm * edit_dialog.scale[1];
+                        }
+                    });
+
+                    ui.add_space(4.0);
+
+                    // Texture offset (fraction of a repeat).
+                    ui.label("Offset");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.surface.offset_u)
+                                .prefix("U ")
+                                .speed(0.005)
+                                .range(-1.0..=1.0)
+                                .max_decimals(3),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut edit_dialog.surface.offset_v)
+                                .prefix("V ")
+                                .speed(0.005)
+                                .range(-1.0..=1.0)
+                                .max_decimals(3),
+                        );
+                    });
                 }
             }
 
@@ -633,13 +743,19 @@ pub fn apply_live_prim_edits(
         // highlight_selected_prim won't fire on its own.
         if let Some(handle) = mat_handle {
             if let Some(mat) = materials.get_mut(&handle.0) {
-                let lin = new_color.to_linear();
+                // Live preview of the texture surface (transparency / glow / full-bright / UV).
+                crate::systems::rendering::apply_surface(mat, new_color, &edit_dialog.surface);
+                // Re-apply the selection highlight on top: brighten RGB, add the blue tint
+                // to the glow emissive so both stay visible while editing.
+                let lin = mat.base_color.to_linear();
                 mat.base_color = Color::linear_rgba(
                     (lin.red * 1.5).min(1.0),
                     (lin.green * 1.5).min(1.0),
                     (lin.blue * 1.5).min(1.0),
                     lin.alpha,
                 );
+                let e = mat.emissive;
+                mat.emissive = LinearRgba::new(e.red + 0.2, e.green + 0.3, e.blue + 0.5, 1.0);
             }
         }
         break;
@@ -662,6 +778,7 @@ fn push_revert(game_state: &mut GameState, dialog: &EditDialogState) {
             path_cut_end: dialog.original_path_cut_end,
             hollow: dialog.original_hollow,
             warp: dialog.original_warp,
+            surface: dialog.original_surface,
             ..Default::default()
         });
     }
@@ -754,6 +871,7 @@ pub fn send_prim_mutations(
                     dialog_state.path_cut_end as f64,
                     dialog_state.hollow as f64,
                     warp_params(&dialog_state.warp),
+                    dialog_state.surface,
                 )
                 .ok()
             });
@@ -782,6 +900,7 @@ pub fn send_prim_mutations(
                         top_shear_y: dialog_state.warp.top_shear_y,
                         slice_begin: dialog_state.warp.slice_begin,
                         slice_end: dialog_state.warp.slice_end,
+                        surface: dialog_state.surface,
                     },
                     Transform::from_xyz(
                         dialog_state.position[0],
@@ -838,6 +957,7 @@ pub fn send_prim_mutations(
                     dialog_state.path_cut_end as f64,
                     dialog_state.hollow as f64,
                     warp_params(&dialog_state.warp),
+                    dialog_state.surface,
                 );
             }
             for (entity, mut prim, mut transform, mat_handle_opt) in prim_query.iter_mut() {
@@ -860,6 +980,7 @@ pub fn send_prim_mutations(
                     prim.path_cut_begin = dialog_state.path_cut_begin;
                     prim.path_cut_end = dialog_state.path_cut_end;
                     prim.hollow = dialog_state.hollow;
+                    prim.surface = dialog_state.surface;
                     apply_warp(&mut prim, &dialog_state.warp);
                     *transform = Transform::from_xyz(
                         dialog_state.position[0],
@@ -885,6 +1006,12 @@ pub fn send_prim_mutations(
                             dialog_state.texture_id.as_deref(),
                         );
                     }
+                    apply_surface_to_material(
+                        mat_handle_opt,
+                        &mut materials,
+                        prim.color,
+                        &prim.surface,
+                    );
                     if geom_changed {
                         commands.entity(entity).insert(NeedsMeshRebuild);
                     }
@@ -915,6 +1042,7 @@ pub fn send_prim_mutations(
                     prim.path_cut_begin = revert.path_cut_begin;
                     prim.path_cut_end = revert.path_cut_end;
                     prim.hollow = revert.hollow;
+                    prim.surface = revert.surface;
                     apply_warp(&mut prim, &revert.warp);
                     *transform = Transform::from_xyz(
                         revert.position[0],
@@ -936,6 +1064,12 @@ pub fn send_prim_mutations(
                             revert.original_texture_id.as_deref(),
                         );
                     }
+                    apply_surface_to_material(
+                        mat_handle_opt,
+                        &mut materials,
+                        prim.color,
+                        &prim.surface,
+                    );
                     if geom_changed {
                         commands.entity(entity).insert(NeedsMeshRebuild);
                     }
@@ -979,6 +1113,23 @@ fn apply_texture_to_material(
         .and_then(|id| cache.handles.get(id))
         .cloned()
         .map(|h| h.into());
+}
+
+/// Applies a prim's surface params (transparency / glow / full-bright / UV transform)
+/// onto a material handle in-place, preserving its `base_color_texture`.
+fn apply_surface_to_material(
+    mat_handle_opt: Option<&MeshMaterial3d<StandardMaterial>>,
+    materials: &mut Assets<StandardMaterial>,
+    color: Color,
+    surface: &vibe_core::PrimSurface,
+) {
+    let Some(mat_handle) = mat_handle_opt else {
+        return;
+    };
+    let Some(mat) = materials.get_mut(&mat_handle.0) else {
+        return;
+    };
+    crate::systems::rendering::apply_surface(mat, color, surface);
 }
 
 // ---------------------------------------------------------------------------

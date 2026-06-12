@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
+use vibe_core::PrimSurface;
 
 /// Twist / taper / top-shear / slice in storage units
 /// (degrees, −1..1, fraction). Bundled to keep the prim DB signatures readable.
@@ -44,6 +45,7 @@ pub fn db_create_prim(
     path_cut_end: f64,
     hollow: f64,
     warp: WarpParams,
+    surface: PrimSurface,
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO prims \
@@ -55,9 +57,12 @@ pub fn db_create_prim(
           path_cut_begin, path_cut_end, hollow, \
           twist_begin, twist_end, taper_x, taper_y, \
           top_shear_x, top_shear_y, slice_begin, slice_end, \
+          alpha, glow, full_bright, repeat_u, repeat_v, flip_u, flip_v, \
+          texture_rotation, offset_u, offset_v, \
           created_at, updated_at) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,\
                  ?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,\
+                 ?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,\
                  datetime('now'),datetime('now'))",
         rusqlite::params![
             region_id,
@@ -87,6 +92,16 @@ pub fn db_create_prim(
             warp.top_shear_y,
             warp.slice_begin,
             warp.slice_end,
+            surface.alpha,
+            surface.glow,
+            surface.full_bright,
+            surface.repeat_u,
+            surface.repeat_v,
+            surface.flip_u,
+            surface.flip_v,
+            surface.rotation,
+            surface.offset_u,
+            surface.offset_v,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -106,6 +121,7 @@ pub fn db_update_prim(
     path_cut_end: f64,
     hollow: f64,
     warp: WarpParams,
+    surface: PrimSurface,
 ) -> Result<()> {
     conn.execute(
         "UPDATE prims SET name=?1, shape=?2, \
@@ -116,7 +132,9 @@ pub fn db_update_prim(
          path_cut_begin=?16, path_cut_end=?17, hollow=?18, \
          twist_begin=?19, twist_end=?20, taper_x=?21, taper_y=?22, \
          top_shear_x=?23, top_shear_y=?24, slice_begin=?25, slice_end=?26, \
-         updated_at=datetime('now') WHERE id=?27",
+         alpha=?27, glow=?28, full_bright=?29, repeat_u=?30, repeat_v=?31, \
+         flip_u=?32, flip_v=?33, texture_rotation=?34, offset_u=?35, offset_v=?36, \
+         updated_at=datetime('now') WHERE id=?37",
         rusqlite::params![
             name,
             shape,
@@ -144,6 +162,16 @@ pub fn db_update_prim(
             warp.top_shear_y,
             warp.slice_begin,
             warp.slice_end,
+            surface.alpha,
+            surface.glow,
+            surface.full_bright,
+            surface.repeat_u,
+            surface.repeat_v,
+            surface.flip_u,
+            surface.flip_v,
+            surface.rotation,
+            surface.offset_u,
+            surface.offset_v,
             prim_id,
         ],
     )?;

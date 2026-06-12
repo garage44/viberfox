@@ -8,7 +8,8 @@ use uuid::Uuid;
 use crate::error::ProtocolError;
 
 /// Bump when the app-frame layout or postcard schema changes incompatibly.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// v8: prim texture surface params (alpha/glow/full-bright/repeats/rotation/offset).
+pub const PROTOCOL_VERSION: u16 = 8;
 
 const APP_HEADER_LEN: usize = 8;
 
@@ -79,6 +80,47 @@ pub struct RegionDto {
     pub sim_z: f32,
 }
 
+/// Per-prim texture surface parameters (Texture tab). Mirrors a subset of the
+/// Second Life texture tab: overall transparency, glow, full-bright, and the
+/// texture UV transform (repeats per face, flip, rotation, offset).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct PrimSurface {
+    /// Overall opacity, 0.0 (fully transparent) – 1.0 (opaque). SL "Transparency %" = (1 − alpha) · 100.
+    pub alpha: f32,
+    /// Surface glow, 0.0 – 1.0. Drives emissive (separate from scene lighting).
+    pub glow: f32,
+    /// Render fully lit regardless of the day/night sun position (SL "Full Bright").
+    pub full_bright: bool,
+    /// Texture repeats per face along U / V (tiling count). Default 1.0.
+    pub repeat_u: f32,
+    pub repeat_v: f32,
+    /// Mirror the texture along U / V.
+    pub flip_u: bool,
+    pub flip_v: bool,
+    /// Texture rotation in degrees.
+    pub rotation: f32,
+    /// Texture offset along U / V (fraction of a repeat).
+    pub offset_u: f32,
+    pub offset_v: f32,
+}
+
+impl Default for PrimSurface {
+    fn default() -> Self {
+        Self {
+            alpha: 1.0,
+            glow: 0.0,
+            full_bright: false,
+            repeat_u: 1.0,
+            repeat_v: 1.0,
+            flip_u: false,
+            flip_v: false,
+            rotation: 0.0,
+            offset_u: 0.0,
+            offset_v: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PrimDto {
     pub id: i64,
@@ -114,6 +156,9 @@ pub struct PrimDto {
     pub slice_begin: f32,
     #[serde(default = "default_slice_end")]
     pub slice_end: f32,
+    /// Texture surface params (ADR-017 / protocol v8).
+    #[serde(default)]
+    pub surface: PrimSurface,
 }
 
 fn default_path_cut_end() -> f32 {
@@ -189,6 +234,9 @@ pub enum NetMessage {
         color: [f32; 3],
         texture_id: Option<String>,
         name: String,
+        /// Texture surface params (ADR-017 / protocol v8).
+        #[serde(default)]
+        surface: PrimSurface,
     },
     /// ADR-017: client requests deletion of a prim by id.
     DeletePrim {
@@ -361,6 +409,7 @@ mod tests {
             color: [1.0, 0.0, 0.0],
             texture_id: Some("brick".into()),
             name: "My Prim".into(),
+            surface: PrimSurface::default(),
         };
         let b = encode_app_frame(&m).unwrap();
         let m2 = decode_app_frame(&b).unwrap();
@@ -390,6 +439,18 @@ mod tests {
             scale: Vec3::new(1.5, 1.5, 1.5),
             color: [0.0, 1.0, 0.0],
             texture_id: Some("grass".into()),
+            path_cut_begin: 0.0,
+            path_cut_end: 1.0,
+            hollow: 0.0,
+            twist_begin: 0.0,
+            twist_end: 0.0,
+            taper_x: 0.0,
+            taper_y: 0.0,
+            top_shear_x: 0.0,
+            top_shear_y: 0.0,
+            slice_begin: 0.0,
+            slice_end: 1.0,
+            surface: PrimSurface::default(),
         };
         let m = NetMessage::PrimUpsert { prim: prim.clone() };
         let b = encode_app_frame(&m).unwrap();

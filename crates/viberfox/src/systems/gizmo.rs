@@ -310,6 +310,7 @@ pub fn handle_gizmo_interaction(
                     color: edit_dialog.color,
                     texture_id: edit_dialog.texture_id.clone(),
                     name: edit_dialog.name.clone(),
+                    surface: edit_dialog.surface,
                 });
             }
             gizmo_state.active_axis = None;
@@ -380,6 +381,7 @@ pub fn handle_gizmo_interaction(
                 color: edit_dialog.color,
                 texture_id: edit_dialog.texture_id.clone(),
                 name: edit_dialog.name.clone(),
+                surface: edit_dialog.surface,
             });
         }
     }

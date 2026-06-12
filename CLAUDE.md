@@ -74,7 +74,7 @@ This is a **Cargo workspace** with three crates:
 
 ### Shared (`vibe_core`)
 
-- `protocol.rs` — `NetMessage` enum, `encode/decode_app_frame`, `PROTOCOL_VERSION` (currently **4**)
+- `protocol.rs` — `NetMessage` enum, `encode/decode_app_frame`, `PROTOCOL_VERSION` (currently **8**)
 - `world.rs` — `TileKey`, lat/lng ↔ tile math, `REGION_SIZE_METERS`
 - `yaw.rs` — angle helpers for avatar direction continuity
 

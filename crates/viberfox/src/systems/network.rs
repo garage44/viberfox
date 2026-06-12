@@ -406,6 +406,7 @@ fn prim_bundle_from_dto(p: PrimDto) -> (Prim, Transform) {
             top_shear_y: p.top_shear_y,
             slice_begin: p.slice_begin,
             slice_end: p.slice_end,
+            surface: p.surface,
         },
         Transform::from_translation(p.position)
             .with_rotation(Quat::from_euler(
@@ -423,13 +424,16 @@ fn decode_png_to_image(png_bytes: &[u8]) -> Option<Image> {
     let rgba = dynamic.to_rgba8();
     let (w, h) = rgba.dimensions();
     // MAIN_WORLD keeps the CPU bytes available for `create_egui_texture_handles`.
-    Some(Image::new(
+    let mut img = Image::new(
         Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         TextureDimension::D2,
         rgba.into_raw(),
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    ))
+    );
+    // Repeat addressing so texture repeats (repeat_u/v > 1) tile.
+    img.sampler = crate::systems::rendering::repeat_linear_sampler();
+    Some(img)
 }
 
 /// Creates egui thumbnail handles for any texture in the library that doesn't have one yet.

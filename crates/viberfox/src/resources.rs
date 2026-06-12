@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::mpsc::UnboundedSender;
-use vibe_core::{NetMessage, TextureEntry};
+use vibe_core::{NetMessage, PrimSurface, TextureEntry};
 
 // ---------------------------------------------------------------------------
 // AI assistant
@@ -153,6 +153,11 @@ pub struct EditDialogState {
     pub path_cut_end: f32,
     pub hollow: f32,
     pub warp: PrimWarp,
+    /// Texture tab surface params (transparency/glow/full-bright/repeats/rotation/offset).
+    pub surface: PrimSurface,
+    /// Transient "Repeats Per Meter" editor helper (not persisted); the Apply button
+    /// derives `surface.repeat_u/v` from this and the object size.
+    pub repeats_per_meter: f32,
     // Snapshot taken when the dialog opens; used to build a revert payload on Cancel.
     pub original_name: String,
     pub original_shape: String,
@@ -165,6 +170,7 @@ pub struct EditDialogState {
     pub original_path_cut_end: f32,
     pub original_hollow: f32,
     pub original_warp: PrimWarp,
+    pub original_surface: PrimSurface,
 }
 
 impl Default for EditDialogState {
@@ -186,6 +192,8 @@ impl Default for EditDialogState {
             path_cut_end: 1.0,
             hollow: 0.0,
             warp: PrimWarp::default(),
+            surface: PrimSurface::default(),
+            repeats_per_meter: 0.0,
             original_name: String::new(),
             original_shape: String::new(),
             original_position: [0.0; 3],
@@ -197,6 +205,7 @@ impl Default for EditDialogState {
             original_path_cut_end: 1.0,
             original_hollow: 0.0,
             original_warp: PrimWarp::default(),
+            original_surface: PrimSurface::default(),
         }
     }
 }

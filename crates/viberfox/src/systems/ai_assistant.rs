@@ -574,6 +574,7 @@ fn run_tool(
                     geom.path_cut_end as f64,
                     geom.hollow as f64,
                     geom.warp(),
+                    vibe_core::PrimSurface::default(),
                 )
                 .ok()
             });
@@ -665,6 +666,11 @@ fn run_tool(
                     new_geom.path_cut_end as f64,
                     new_geom.hollow as f64,
                     new_geom.warp(),
+                    prim_query
+                        .iter()
+                        .find(|(_, p, _)| p.id == prim_id)
+                        .map(|(_, p, _)| p.surface)
+                        .unwrap_or_default(),
                 );
             }
 
@@ -847,6 +853,7 @@ impl PrimGeom {
             top_shear_y: self.top_shear_y,
             slice_begin: self.slice_begin,
             slice_end: self.slice_end,
+            surface: vibe_core::PrimSurface::default(),
         }
     }
 }

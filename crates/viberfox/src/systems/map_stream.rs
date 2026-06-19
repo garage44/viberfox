@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::view::NoFrustumCulling;
 use bevy_image::{Image, ImageSampler};
 use big_space::prelude::{BigSpace, Grid, GridCell};
 
@@ -23,8 +24,17 @@ use crate::components::Region;
 use crate::resources::OsmTileUrlTemplate;
 use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD};
 use crate::systems::tile_loader::load_tile_image;
-use vibe_core::world::{lat_lng_to_tile, tile_to_meters};
+use vibe_core::world::{tile_to_lat_lng, tile_to_meters};
 use vibe_core::TileKey;
+
+/// Fractional Web Mercator tile coordinate (no flooring) of a lat/lng at a zoom.
+fn lat_lng_to_tile_frac(lat: f64, lng: f64, zoom: u32) -> (f64, f64) {
+    let n = 2.0_f64.powi(zoom as i32);
+    let x = (lng + 180.0) / 360.0 * n;
+    let lat_rad = lat.to_radians();
+    let y = (1.0 - (lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / std::f64::consts::PI) / 2.0 * n;
+    (x, y)
+}
 
 /// Tiles to keep loaded in each direction from the camera (radius 4 → 9×9).
 const LOAD_RADIUS: i64 = 4;
@@ -61,7 +71,9 @@ pub struct StreamTileReady;
 
 #[derive(Resource)]
 pub struct MapStream {
-    /// World-origin geographic anchor (lat, lng) and the region's base zoom.
+    /// Fixed world origin: the *centre* of the region tile at base zoom (lat, lng),
+    /// plus the base zoom. Every zoom's tiles are placed relative to this one point,
+    /// so changing zoom never shifts the map.
     anchor: Option<(f64, f64, u32)>,
     /// Currently-displayed zoom (driven by camera altitude for LOD).
     current_zoom: u32,
@@ -107,8 +119,13 @@ pub fn init_map_stream(
         return;
     };
     let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
-    let ground = tile_to_meters(z, region.latitude) as f32;
-    stream.anchor = Some((region.latitude, region.longitude, z));
+    // World origin = centre of the region tile (matches the region quad + buildings).
+    let (n_lat, w_lng) = tile_to_lat_lng(region.tile_x, region.tile_y, z);
+    let (s_lat, e_lng) = tile_to_lat_lng(region.tile_x + 1, region.tile_y + 1, z);
+    let clat = (n_lat + s_lat) / 2.0;
+    let clng = (w_lng + e_lng) / 2.0;
+    let ground = tile_to_meters(z, clat) as f32;
+    stream.anchor = Some((clat, clng, z));
     stream.current_zoom = z;
     stream.ground_size = ground;
     stream.quad = Some(meshes.add(Cuboid::new(ground, 0.04, ground)));
@@ -123,7 +140,13 @@ pub fn init_map_stream(
     let results = stream.results.clone();
     std::thread::spawn(move || {
         while let Ok(key) = rx.recv() {
-            let bytes = load_tile_image(&key, &template).ok();
+            let bytes = match load_tile_image(&key, &template) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    tracing::warn!(tile = %key.to_path(), error = %e, "map tile fetch failed");
+                    None
+                }
+            };
             if let Ok(mut g) = results.lock() {
                 g.insert(key, bytes);
             }
@@ -140,7 +163,7 @@ pub fn update_map_stream(
     camera: Query<(&GridCell, &Transform), With<FreeCamera>>,
     bigspace: Query<Entity, With<BigSpace>>,
 ) {
-    let Some((alat, alng, base_zoom)) = stream.anchor else {
+    let Some((clat, clng, base_zoom)) = stream.anchor else {
         return;
     };
     let (Some(placeholder), Some(jobs)) = (stream.placeholder.clone(), stream.jobs.clone()) else {
@@ -170,7 +193,7 @@ pub fn update_map_stream(
         for (_, entity) in stream.loaded.drain() {
             commands.entity(entity).despawn();
         }
-        let gs = tile_to_meters(desired, alat) as f32;
+        let gs = tile_to_meters(desired, clat) as f32;
         stream.current_zoom = desired;
         stream.ground_size = gs;
         stream.quad = Some(meshes.add(Cuboid::new(gs, 0.04, gs)));
@@ -181,16 +204,18 @@ pub fn update_map_stream(
     };
     let gs = stream.ground_size;
 
-    // Anchor tile at the current zoom; world origin = its centre.
-    let (ax, ay) = lat_lng_to_tile(alat, alng, zoom);
+    // Fractional tile coord of the fixed world origin at this zoom. A tile (tx,ty)
+    // centre sits at world ((tx+0.5 - fcx)*gs, (ty+0.5 - fcy)*gs), so the origin
+    // stays put across zoom changes.
+    let (fcx, fcy) = lat_lng_to_tile_frac(clat, clng, zoom);
 
     // Camera world position → centre tile.
     let world_x = cell.x as f32 * WORLD_CELL_EDGE + tf.translation.x;
     let world_z = cell.z as f32 * WORLD_CELL_EDGE + tf.translation.z;
-    let ctx = ax + (world_x / gs).round() as i64;
-    let cty = ay + (world_z / gs).round() as i64;
+    let ctx = (world_x as f64 / gs as f64 + fcx - 0.5).round() as i64;
+    let cty = (world_z as f64 / gs as f64 + fcy - 0.5).round() as i64;
 
-    // Desired set around the camera (the region quad sits atop the centre tile).
+    // Desired set around the camera.
     let mut desired = HashSet::new();
     for b in -LOAD_RADIUS..=LOAD_RADIUS {
         for a in -LOAD_RADIUS..=LOAD_RADIUS {
@@ -203,10 +228,10 @@ pub fn update_map_stream(
         if stream.loaded.contains_key(key) {
             continue;
         }
-        let di = (key.x - ax) as f32;
-        let dj = (key.y - ay) as f32;
+        let wx = ((key.x as f64 + 0.5 - fcx) * gs as f64) as f32;
+        let wz = ((key.y as f64 + 0.5 - fcy) * gs as f64) as f32;
         // Place under the BigSpace so the tile rebases with the camera (any range).
-        let world = Vec3::new(di * gs, -0.03, dj * gs);
+        let world = Vec3::new(wx, -0.03, wz);
         let (tile_cell, local) =
             Grid::new(WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD).translation_to_grid(world.as_dvec3());
         let entity = commands
@@ -216,6 +241,8 @@ pub fn update_map_stream(
                 Transform::from_translation(local),
                 tile_cell,
                 ChildOf(root),
+                // Flat tiles + big_space rebasing confuse frustum culling; opt out.
+                NoFrustumCulling,
                 StreamTile { key: key.clone() },
             ))
             .id();

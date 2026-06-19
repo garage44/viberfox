@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::view::NoFrustumCulling;
 use big_space::prelude::{BigSpace, Grid, GridCell};
 
 use crate::components::Region;
@@ -56,7 +57,9 @@ const DEFAULT_HEIGHT: f32 = 6.0;
 /// Tiles out from the camera covered by the building patch.
 const BUILDING_PATCH_RADIUS: i64 = 3;
 /// Re-fetch the patch once the camera has moved this many tiles from the last centre.
-const REFETCH_TILES: i64 = 2;
+/// Larger = fewer Overpass calls (avoids 429/504 rate limits) at the cost of the
+/// patch trailing the camera a bit further before refreshing.
+const REFETCH_TILES: i64 = 4;
 
 /// Muted, realistic building tones (tans, greys, beige, muted brick, off-white).
 const BUILDING_COLORS: [[f32; 3]; 8] = [
@@ -193,6 +196,7 @@ pub fn update_buildings(
                     Transform::from_translation(local),
                     cell,
                     ChildOf(root),
+                    NoFrustumCulling,
                     OsmBuildingMesh,
                 ))
                 .id();

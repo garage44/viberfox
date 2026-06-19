@@ -20,3 +20,7 @@
 | [016](./016-authentication-and-session-model-v0.md) | Authentication and Server Session Model (v0) | Proposed | auth, session, security, networking, protocol, cli, ops |
 | [017](./017/README.md) | Prim Authoring and Editing (v0) | Proposed | authoring, prims, ui, protocol, persistence, textures, replication |
 | [018](./018-prim-texture-surface-params.md) | Prim Texture Surface Parameters | Proposed | prims, textures, ui, protocol, persistence, rendering |
+| [019](./019-planet-scale-floating-origin.md) | Planet-Scale Floating-Origin Coordinate Model | Proposed | coordinates, precision, rendering, osm, large-world |
+| [020](./020-map-tier-and-sim-tier-world-model.md) | Two-Tier World — Continuous Map Surface and Discrete Sim Regions | Proposed | coordinates, map, regions, osm, large-world, architecture |
+| [021](./021-region-tessellation-flat-clusters-quad-index.md) | Region Tessellation — Flat Metric Clusters with a Global Quad Index | Proposed | coordinates, regions, addressing, sim, large-world, architecture |
+| [022](./022-osm-building-import.md) | OSM 3D Building Import (Overpass → Extruded Footprints) | Proposed | osm, buildings, rendering, import, dependency |

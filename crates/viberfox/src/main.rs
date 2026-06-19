@@ -51,23 +51,27 @@ fn main() {
         .join("../../assets")
         .display()
         .to_string();
-    app.add_plugins(
-        DefaultPlugins
-            .build()
-            .disable::<LogPlugin>()
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Viberfox".into(),
-                    resolution: (1280.0, 720.0).into(),
-                    ..default()
-                }),
-                ..default()
-            })
-            .set(AssetPlugin {
-                file_path: asset_dir,
+    let default_plugins = DefaultPlugins
+        .build()
+        .disable::<LogPlugin>()
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Viberfox".into(),
+                resolution: (1280.0, 720.0).into(),
                 ..default()
             }),
-    )
+            ..default()
+        })
+        .set(AssetPlugin {
+            file_path: asset_dir,
+            ..default()
+        })
+        // big_space owns transform propagation (ADR-019); Bevy's TransformPlugin
+        // must be disabled or big_space errors at startup.
+        .disable::<bevy::transform::TransformPlugin>();
+
+    app.add_plugins(default_plugins)
+    .add_plugins(big_space::prelude::BigSpaceDefaultPlugins)
     .add_plugins(EguiPlugin)
     .add_plugins(AtmospherePlugin)
     .add_plugins(MaterialPlugin::<StarSkyMaterial>::default())
@@ -91,7 +95,9 @@ fn main() {
             .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string()),
     })
     .init_resource::<AiAssistantState>()
-    .init_resource::<DevPanelState>();
+    .init_resource::<DevPanelState>()
+    .init_resource::<systems::osm_buildings::OsmBuildings>()
+    .init_resource::<systems::map_tiles::MapTiles>();
 
     if let Some(addr) = cli.connect {
         app.insert_resource(ConnectAddr(addr));
@@ -139,6 +145,10 @@ fn main() {
         (
             systems::tile_loader::load_region_tiles,
             rendering::update_region_materials,
+            systems::osm_buildings::start_building_fetch.after(rendering::spawn_regions),
+            systems::osm_buildings::spawn_buildings.after(systems::osm_buildings::start_building_fetch),
+            systems::map_tiles::spawn_map_grid.after(rendering::spawn_regions),
+            systems::map_tiles::apply_map_tiles.after(systems::map_tiles::spawn_map_grid),
         ),
     )
     .add_systems(
@@ -261,7 +271,7 @@ fn setup_sky(
 
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
-        brightness: 0.02 + 0.08 * day,
+        brightness: 10.0 + 3000.0 * day,
         affects_lightmapped_meshes: true,
     });
 }
@@ -372,7 +382,7 @@ fn apply_day_night_cycle(
         *tf = Transform::from_translation(Vec3::ZERO).looking_to(-sun_dir, Vec3::Y);
         light.illuminance = AMBIENT_DAYLIGHT * day;
     }
-    ambient.brightness = 0.02 + 0.08 * day;
+    ambient.brightness = 10.0 + 3000.0 * day;
 }
 
 /// Spawns the star-map night sky: a box centred on the viewer whose custom material

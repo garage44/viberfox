@@ -1,6 +1,7 @@
 //! Shared types for vibers sim and client (ADR-006, ADR-009, ADR-015).
 
 pub mod error;
+pub mod geo;
 pub mod protocol;
 pub mod world;
 pub mod yaw;
@@ -14,5 +15,8 @@ pub use protocol::{
 pub use world::{
     find_optimal_zoom, lat_lng_to_tile, tile_to_lat_lng, tile_to_meters, TileKey,
     REGION_SIZE_METERS, REGION_ZOOM_LEVEL,
+};
+pub use geo::{
+    geodetic_to_ecef, region_index, region_origin, regions_adjacent, TangentFrame, REGION_SIZE,
 };
 pub use yaw::{snap_yaw_continuation, wrap_angle_pi};

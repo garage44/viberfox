@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy_atmosphere::plugin::AtmosphereSkyBox;
 use bevy_atmosphere::prelude::*;
 use bevy_atmosphere::skybox::{self, AtmosphereSkyBoxMaterial};
+use big_space::prelude::{BigSpaceCommands, FloatingOrigin, Grid};
 
 use crate::resources::{AvatarState, CameraState, CameraMode};
 use crate::systems::egui_manager::EguiManager;
@@ -21,6 +22,15 @@ const MIN_CAMERA_HEIGHT: f32 = 0.5;
 /// Match [`bevy_atmosphere::settings::SkyboxCreationMode`] fallback when projection far is unavailable.
 const SKYBOX_MESH_FAR: f32 = 1000.0;
 
+/// Grid cell edge for the world `BigSpace` (ADR-019/021). Large enough that local
+/// play rarely recenters; small enough to keep within-cell f32 precise.
+const WORLD_CELL_EDGE: f32 = 10_000.0;
+/// Hysteresis buffer past a cell edge before big_space recenters an entity.
+const WORLD_SWITCH_THRESHOLD: f32 = 100.0;
+
+/// Spawn the world [`BigSpace`] root with the camera as its [`FloatingOrigin`]
+/// (ADR-019). Other content currently spawns at the origin (cell 0) and renders
+/// correctly; geo-derived `GridCell` placement arrives with planet-scale streaming.
 pub fn setup_camera(
     mut commands: Commands,
     mut camera_state: ResMut<CameraState>,
@@ -32,22 +42,28 @@ pub fn setup_camera(
     camera_state.azimuth = 0.0;
     camera_state.pitch = std::f32::consts::PI / 6.0;
 
-    commands
-        .spawn((
-            Camera3d::default(),
-            Transform::from_xyz(0.0, 10.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
-            AtmosphereCamera::default(),
-            FreeCamera,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Mesh3d(meshes.add(skybox::mesh(SKYBOX_MESH_FAR))),
-                MeshMaterial3d(sky_material.0.clone()),
+    let skybox_mesh = meshes.add(skybox::mesh(SKYBOX_MESH_FAR));
+    let sky_handle = sky_material.0.clone();
+
+    commands.spawn_big_space(
+        Grid::new(WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD),
+        |root| {
+            root.spawn_spatial((
+                Camera3d::default(),
+                Transform::from_xyz(0.0, 10.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+                AtmosphereCamera::default(),
+                FreeCamera,
+                FloatingOrigin,
+            ))
+            .with_child((
+                Mesh3d(skybox_mesh),
+                MeshMaterial3d(sky_handle),
                 AtmosphereSkyBox,
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
-        });
+        },
+    );
 }
 
 pub fn camera_mode_toggle(

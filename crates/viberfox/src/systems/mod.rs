@@ -4,7 +4,7 @@ pub mod database;
 pub mod debug;
 pub mod egui_manager;
 pub mod free_camera;
-pub mod map_tiles;
+pub mod map_stream;
 pub mod gizmo;
 pub mod network;
 pub mod osm_buildings;

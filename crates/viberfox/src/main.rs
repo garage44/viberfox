@@ -97,7 +97,7 @@ fn main() {
     .init_resource::<AiAssistantState>()
     .init_resource::<DevPanelState>()
     .init_resource::<systems::osm_buildings::OsmBuildings>()
-    .init_resource::<systems::map_tiles::MapTiles>();
+    .init_resource::<systems::map_stream::MapStream>();
 
     if let Some(addr) = cli.connect {
         app.insert_resource(ConnectAddr(addr));
@@ -145,10 +145,10 @@ fn main() {
         (
             systems::tile_loader::load_region_tiles,
             rendering::update_region_materials,
-            systems::osm_buildings::start_building_fetch.after(rendering::spawn_regions),
-            systems::osm_buildings::spawn_buildings.after(systems::osm_buildings::start_building_fetch),
-            systems::map_tiles::spawn_map_grid.after(rendering::spawn_regions),
-            systems::map_tiles::apply_map_tiles.after(systems::map_tiles::spawn_map_grid),
+            systems::osm_buildings::update_buildings.after(rendering::spawn_regions),
+            systems::map_stream::init_map_stream.after(rendering::spawn_regions),
+            systems::map_stream::update_map_stream.after(systems::map_stream::init_map_stream),
+            systems::map_stream::apply_stream_textures.after(systems::map_stream::update_map_stream),
         ),
     )
     .add_systems(

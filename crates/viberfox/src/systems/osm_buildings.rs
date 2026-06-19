@@ -1,23 +1,24 @@
-//! OSM 3D buildings — increment 1 of the map/sim design (ADR-020/021).
+//! OSM 3D buildings (ADR-020/022) — a camera-following building patch.
 //!
-//! Fetches OSM building footprints for the loaded region's tile bbox via the
-//! Overpass API (background thread, so the window never blocks), extrudes each
-//! footprint to its `height` / `building:levels` tag, and spawns it as a mesh in
-//! region-local space. Scoped to the single existing region — no streaming, no
-//! floating origin yet; this is the data-quality + extrusion de-risking step.
+//! Fetches OSM building footprints around the camera from the Overpass API on a
+//! background thread, extrudes each footprint to its `height` / `building:levels`
+//! tag, and spawns it as a coloured mesh. As the camera roams, the patch is
+//! re-fetched and the previous set despawned, so buildings follow the streamed
+//! ground (`map_stream`).
 //!
-//! Placement maps each building vertex through the same Web Mercator math the
-//! tiles use (fractional tile coords → the region quad), and scales heights by
-//! the quad-to-real-meter ratio so buildings sit proportionally on the displayed
-//! map regardless of the tile's true ground size.
+//! Placement maps each vertex through the same Web Mercator math as the tiles
+//! (relative to the anchor region tile); heights use the interim quad-to-metre
+//! scale until the real-metre frame (ADR-019) lands.
 
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
+use big_space::prelude::GridCell;
 
 use crate::components::Region;
+use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE};
 use vibe_core::world::{tile_to_lat_lng, tile_to_meters, REGION_SIZE_METERS};
 
 /// One OSM building: an outer-ring footprint in (lat, lng) plus a height in metres.
@@ -27,27 +28,20 @@ struct Building {
     height_m: f32,
 }
 
-enum Fetch {
-    Pending,
-    Done(Vec<Building>),
-    Failed(String),
-}
-
-#[derive(Resource)]
+/// Camera-following building patch: re-fetched from Overpass when the camera
+/// drifts, with the old set despawned (ADR-020/022). Anchored to the region tile
+/// so buildings stay aligned with the streamed ground.
+#[derive(Resource, Default)]
 pub struct OsmBuildings {
-    result: Arc<Mutex<Fetch>>,
-    started: bool,
-    spawned: bool,
-}
-
-impl Default for OsmBuildings {
-    fn default() -> Self {
-        Self {
-            result: Arc::new(Mutex::new(Fetch::Pending)),
-            started: false,
-            spawned: false,
-        }
-    }
+    /// Region anchor: tile_x, tile_y, zoom, latitude.
+    anchor: Option<(i64, i64, u32, f64)>,
+    /// Centre tile of the last fetch (re-fetch when the camera moves away).
+    last_center: Option<(i64, i64)>,
+    in_flight: bool,
+    /// Latest completed fetch result, consumed on the main thread.
+    fetch: Arc<Mutex<Option<Result<Vec<Building>, String>>>>,
+    /// Currently-spawned building meshes (despawned on re-fetch).
+    entities: Vec<Entity>,
 }
 
 /// Marker for spawned building meshes.
@@ -63,122 +57,147 @@ const STOREY_HEIGHT: f32 = 3.0;
 /// Fallback height when a building has no height/levels tags at all.
 const DEFAULT_HEIGHT: f32 = 6.0;
 
-/// Once a region exists, kick off a background Overpass fetch for its tile bbox.
-pub fn start_building_fetch(mut osm: ResMut<OsmBuildings>, regions: Query<&Region>) {
-    if osm.started {
-        return;
-    }
-    let Some(region) = regions.iter().next() else {
-        return;
-    };
+/// Tiles out from the camera covered by the building patch.
+const BUILDING_PATCH_RADIUS: i64 = 3;
+/// Re-fetch the patch once the camera has moved this many tiles from the last centre.
+const REFETCH_TILES: i64 = 2;
 
-    let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
-    // Cover the whole map-tier patch, not just the centre tile, so buildings
-    // appear wherever there's ground (placement is relative to the centre tile).
-    let r = crate::systems::map_tiles::RADIUS;
-    let (north, west) = tile_to_lat_lng(region.tile_x - r, region.tile_y - r, z);
-    let (south, east) = tile_to_lat_lng(region.tile_x + r + 1, region.tile_y + r + 1, z);
+/// Muted, realistic building tones (tans, greys, beige, muted brick, off-white).
+const BUILDING_COLORS: [[f32; 3]; 8] = [
+    [0.80, 0.76, 0.70],
+    [0.72, 0.70, 0.66],
+    [0.78, 0.72, 0.64],
+    [0.68, 0.66, 0.64],
+    [0.76, 0.63, 0.56],
+    [0.83, 0.81, 0.77],
+    [0.70, 0.65, 0.58],
+    [0.74, 0.71, 0.69],
+];
 
-    let query = format!(
-        "[out:json][timeout:25];way[\"building\"]({south},{west},{north},{east});out geom;"
-    );
-
-    let result = osm.result.clone();
-    osm.started = true;
-    tracing::info!(south, west, north, east, "fetching OSM buildings (Overpass)");
-
-    std::thread::spawn(move || {
-        let fetched = fetch_buildings(&query);
-        let next = match fetched {
-            Ok(list) => {
-                tracing::info!(count = list.len(), "OSM buildings fetched");
-                Fetch::Done(list)
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "OSM buildings fetch failed");
-                Fetch::Failed(e)
-            }
-        };
-        if let Ok(mut slot) = result.lock() {
-            *slot = next;
-        }
-    });
+/// Deterministic palette index from a building's location, so the same building
+/// always gets the same colour and neighbours differ.
+fn building_color_index(b: &Building) -> usize {
+    let (lat, lng) = b.ring[0];
+    let h = ((lat * 1.0e5) as i64)
+        .wrapping_mul(73_856_093)
+        ^ ((lng * 1.0e5) as i64).wrapping_mul(19_349_663);
+    h.unsigned_abs() as usize
 }
 
-/// When the fetch completes, extrude and spawn the buildings into region space.
-pub fn spawn_buildings(
+/// Re-fetch and respawn the building patch as the camera roams (ADR-020/022).
+pub fn update_buildings(
     mut commands: Commands,
     mut osm: ResMut<OsmBuildings>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     regions: Query<&Region>,
+    camera: Query<(&GridCell, &Transform), With<FreeCamera>>,
 ) {
-    if osm.spawned {
-        return;
+    // Establish the region anchor once.
+    if osm.anchor.is_none() {
+        let Some(region) = regions.iter().next() else {
+            return;
+        };
+        let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
+        osm.anchor = Some((region.tile_x, region.tile_y, z, region.latitude));
     }
-    let Some(region) = regions.iter().next() else {
+    let (ax, ay, z, lat) = osm.anchor.unwrap();
+
+    // Camera's current tile (world position → tile offset from the anchor).
+    let Ok((cell, tf)) = camera.single() else {
         return;
     };
+    let world_x = cell.x as f32 * WORLD_CELL_EDGE + tf.translation.x;
+    let world_z = cell.z as f32 * WORLD_CELL_EDGE + tf.translation.z;
+    let center = (
+        ax + (world_x / GROUND_FULL).round() as i64,
+        ay + (world_z / GROUND_FULL).round() as i64,
+    );
 
-    // Take the fetched buildings out (or bail until ready).
-    let buildings = {
-        let mut slot = match osm.result.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        match &mut *slot {
-            Fetch::Pending => return,
-            Fetch::Failed(e) => {
-                tracing::error!(error = %e, "OSM buildings unavailable; skipping");
-                drop(slot);
-                osm.spawned = true; // don't retry
-                return;
+    // Kick off a re-fetch when the camera has drifted far enough.
+    let need = match osm.last_center {
+        None => true,
+        Some((lx, ly)) => (center.0 - lx).abs() + (center.1 - ly).abs() >= REFETCH_TILES,
+    };
+    if need && !osm.in_flight {
+        let r = BUILDING_PATCH_RADIUS;
+        let (north, west) = tile_to_lat_lng(center.0 - r, center.1 - r, z);
+        let (south, east) = tile_to_lat_lng(center.0 + r + 1, center.1 + r + 1, z);
+        let query = format!(
+            "[out:json][timeout:25];way[\"building\"]({south},{west},{north},{east});out geom;"
+        );
+        osm.in_flight = true;
+        osm.last_center = Some(center);
+        let slot = osm.fetch.clone();
+        std::thread::spawn(move || {
+            let result = fetch_buildings(&query);
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(result);
             }
-            Fetch::Done(list) => std::mem::take(list),
+        });
+    }
+
+    // Apply a completed fetch: despawn the old patch, spawn the new one.
+    let ready = osm.fetch.lock().ok().and_then(|mut g| g.take());
+    let Some(result) = ready else {
+        return;
+    };
+    osm.in_flight = false;
+    let buildings = match result {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "OSM buildings fetch failed");
+            return;
         }
     };
 
-    let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
-    let origin = region.sim_origin.unwrap_or(Vec3::ZERO);
-    // Quad-to-real-metre ratio: the quad shows a full tile across GROUND_FULL m.
-    let real_tile_m = tile_to_meters(z, region.latitude) as f32;
+    for entity in osm.entities.drain(..) {
+        commands.entity(entity).despawn();
+    }
+
+    // Quad-to-real-metre ratio for heights (interim, until the real-metre frame).
+    let real_tile_m = tile_to_meters(z, lat) as f32;
     let height_scale = if real_tile_m > 0.0 {
         GROUND_FULL / real_tile_m
     } else {
         1.0
     };
 
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.78, 0.74, 0.68),
-        perceptual_roughness: 0.95,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
-    });
+    // Per-location palette so the city reads as distinct buildings.
+    let palette: Vec<Handle<StandardMaterial>> = BUILDING_COLORS
+        .iter()
+        .map(|c| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(c[0], c[1], c[2]),
+                perceptual_roughness: 0.95,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            })
+        })
+        .collect();
 
-    let mut spawned = 0;
     for b in &buildings {
-        // Footprint → region-local XZ.
         let ring: Vec<Vec2> = b
             .ring
             .iter()
-            .map(|&(lat, lng)| lat_lng_to_local(lat, lng, region.tile_x, region.tile_y, z))
+            .map(|&(la, lo)| lat_lng_to_local(la, lo, ax, ay, z))
             .collect();
-
         let height = b.height_m * height_scale;
         if let Some(mesh) = build_building_mesh(&ring, height) {
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material.clone()),
-                Transform::from_translation(origin + Vec3::Y * 0.05),
-                OsmBuildingMesh,
-            ));
-            spawned += 1;
+            let mat = palette[building_color_index(b) % palette.len()].clone();
+            let entity = commands
+                .spawn((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(mat),
+                    Transform::from_xyz(0.0, 0.05, 0.0),
+                    OsmBuildingMesh,
+                ))
+                .id();
+            osm.entities.push(entity);
         }
     }
-
-    osm.spawned = true;
-    tracing::info!(spawned, height_scale, "OSM buildings spawned");
+    tracing::info!(count = osm.entities.len(), "buildings updated");
 }
 
 /// Web Mercator (lat,lng) → region-local metres on the displayed quad.

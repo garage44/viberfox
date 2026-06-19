@@ -24,7 +24,7 @@ const SKYBOX_MESH_FAR: f32 = 1000.0;
 
 /// Grid cell edge for the world `BigSpace` (ADR-019/021). Large enough that local
 /// play rarely recenters; small enough to keep within-cell f32 precise.
-const WORLD_CELL_EDGE: f32 = 10_000.0;
+pub const WORLD_CELL_EDGE: f32 = 10_000.0;
 /// Hysteresis buffer past a cell edge before big_space recenters an entity.
 const WORLD_SWITCH_THRESHOLD: f32 = 100.0;
 

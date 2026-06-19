@@ -23,11 +23,32 @@ use crate::components::Region;
 use crate::resources::OsmTileUrlTemplate;
 use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD};
 use crate::systems::tile_loader::load_tile_image;
-use vibe_core::world::tile_to_meters;
+use vibe_core::world::{lat_lng_to_tile, tile_to_meters};
 use vibe_core::TileKey;
 
 /// Tiles to keep loaded in each direction from the camera (radius 4 → 9×9).
 const LOAD_RADIUS: i64 = 4;
+/// Lowest (coarsest) zoom we drop to when high up.
+const MIN_ZOOM: u32 = 13;
+/// Altitude margin a zoom boundary must be crossed by before switching (anti-thrash).
+const ZOOM_HYSTERESIS_M: f32 = 60.0;
+
+/// Pick a map zoom from camera altitude: detailed near the ground, coarser high up
+/// so a wide area is visible cheaply. Capped at the region's base zoom.
+fn zoom_for_altitude(altitude_m: f32, base_zoom: u32) -> u32 {
+    let z = if altitude_m < 200.0 {
+        base_zoom
+    } else if altitude_m < 700.0 {
+        base_zoom.saturating_sub(1)
+    } else if altitude_m < 2_000.0 {
+        base_zoom.saturating_sub(2)
+    } else if altitude_m < 6_000.0 {
+        base_zoom.saturating_sub(3)
+    } else {
+        base_zoom.saturating_sub(4)
+    };
+    z.max(MIN_ZOOM)
+}
 
 #[derive(Component)]
 pub struct StreamTile {
@@ -40,9 +61,11 @@ pub struct StreamTileReady;
 
 #[derive(Resource)]
 pub struct MapStream {
-    /// Anchor tile (the region's tile) + zoom; world origin sits at its centre.
-    anchor: Option<(i64, i64, u32)>,
-    /// Real ground edge of a tile in metres at the anchor latitude.
+    /// World-origin geographic anchor (lat, lng) and the region's base zoom.
+    anchor: Option<(f64, f64, u32)>,
+    /// Currently-displayed zoom (driven by camera altitude for LOD).
+    current_zoom: u32,
+    /// Real ground edge of a tile in metres at the current zoom + anchor latitude.
     ground_size: f32,
     loaded: HashMap<TileKey, Entity>,
     /// Tiles ever queued for fetch (kept as a cache so re-entry doesn't refetch).
@@ -57,6 +80,7 @@ impl Default for MapStream {
     fn default() -> Self {
         Self {
             anchor: None,
+            current_zoom: 0,
             ground_size: 0.0,
             loaded: HashMap::new(),
             requested: HashSet::new(),
@@ -84,7 +108,8 @@ pub fn init_map_stream(
     };
     let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
     let ground = tile_to_meters(z, region.latitude) as f32;
-    stream.anchor = Some((region.tile_x, region.tile_y, z));
+    stream.anchor = Some((region.latitude, region.longitude, z));
+    stream.current_zoom = z;
     stream.ground_size = ground;
     stream.quad = Some(meshes.add(Cuboid::new(ground, 0.04, ground)));
     stream.placeholder = Some(materials.add(StandardMaterial {
@@ -111,15 +136,14 @@ pub fn init_map_stream(
 pub fn update_map_stream(
     mut commands: Commands,
     mut stream: ResMut<MapStream>,
+    mut meshes: ResMut<Assets<Mesh>>,
     camera: Query<(&GridCell, &Transform), With<FreeCamera>>,
     bigspace: Query<Entity, With<BigSpace>>,
 ) {
-    let Some((ax, ay, z)) = stream.anchor else {
+    let Some((alat, alng, base_zoom)) = stream.anchor else {
         return;
     };
-    let (Some(quad), Some(placeholder), Some(jobs)) =
-        (stream.quad.clone(), stream.placeholder.clone(), stream.jobs.clone())
-    else {
+    let (Some(placeholder), Some(jobs)) = (stream.placeholder.clone(), stream.jobs.clone()) else {
         return;
     };
     let Ok((cell, tf)) = camera.single() else {
@@ -128,24 +152,49 @@ pub fn update_map_stream(
     let Ok(root) = bigspace.single() else {
         return;
     };
+
+    // LOD: choose zoom from camera altitude; rebuild the patch when it changes.
+    // Hysteresis: the boundary must be crossed by a margin so hovering can't thrash.
+    let altitude = cell.y as f32 * WORLD_CELL_EDGE + tf.translation.y;
+    let cur = stream.current_zoom;
+    let desired = zoom_for_altitude(altitude, base_zoom);
+    let confirmed = if desired < cur {
+        zoom_for_altitude(altitude - ZOOM_HYSTERESIS_M, base_zoom) <= desired
+    } else if desired > cur {
+        zoom_for_altitude(altitude + ZOOM_HYSTERESIS_M, base_zoom) >= desired
+    } else {
+        false
+    };
+    if confirmed {
+        tracing::info!(from = cur, to = desired, altitude, "map LOD zoom changed");
+        for (_, entity) in stream.loaded.drain() {
+            commands.entity(entity).despawn();
+        }
+        let gs = tile_to_meters(desired, alat) as f32;
+        stream.current_zoom = desired;
+        stream.ground_size = gs;
+        stream.quad = Some(meshes.add(Cuboid::new(gs, 0.04, gs)));
+    }
+    let zoom = stream.current_zoom;
+    let Some(quad) = stream.quad.clone() else {
+        return;
+    };
     let gs = stream.ground_size;
 
-    // Camera world position (cell index × cell edge + within-cell offset).
+    // Anchor tile at the current zoom; world origin = its centre.
+    let (ax, ay) = lat_lng_to_tile(alat, alng, zoom);
+
+    // Camera world position → centre tile.
     let world_x = cell.x as f32 * WORLD_CELL_EDGE + tf.translation.x;
     let world_z = cell.z as f32 * WORLD_CELL_EDGE + tf.translation.z;
-    let cdi = (world_x / gs).round() as i64;
-    let cdj = (world_z / gs).round() as i64;
-    let (ctx, cty) = (ax + cdi, ay + cdj);
+    let ctx = ax + (world_x / gs).round() as i64;
+    let cty = ay + (world_z / gs).round() as i64;
 
-    // Desired set around the camera (skip the anchor tile — the region covers it).
+    // Desired set around the camera (the region quad sits atop the centre tile).
     let mut desired = HashSet::new();
     for b in -LOAD_RADIUS..=LOAD_RADIUS {
         for a in -LOAD_RADIUS..=LOAD_RADIUS {
-            let key = TileKey::new(ctx + a, cty + b, z);
-            if key.x == ax && key.y == ay {
-                continue;
-            }
-            desired.insert(key);
+            desired.insert(TileKey::new(ctx + a, cty + b, zoom));
         }
     }
 

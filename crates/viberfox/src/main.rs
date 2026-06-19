@@ -23,6 +23,7 @@ use resources::{
     DevPanelState, EditDialogState, GameState, LocalAvatarSimId, MarqueeState, MouseState,
     OsmTileUrlTemplate, PrimTextureCache, TextureLibrary,
 };
+use big_space::prelude::{BigSpace, GridCell};
 use systems::egui_manager::EguiPlugin;
 use systems::*;
 
@@ -149,6 +150,7 @@ fn main() {
             systems::map_stream::init_map_stream.after(rendering::spawn_regions),
             systems::map_stream::update_map_stream.after(systems::map_stream::init_map_stream),
             systems::map_stream::apply_stream_textures.after(systems::map_stream::update_map_stream),
+            attach_avatar_to_bigspace,
         ),
     )
     .add_systems(
@@ -248,6 +250,23 @@ fn spawn_avatar_entity(mut commands: Commands) {
         Avatar,
         Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)).with_scale(Vec3::splat(0.02)),
     ));
+}
+
+/// Attach the avatar to the world `BigSpace` once it exists, so it rebases with
+/// the camera instead of glitching past the first cell (ADR-019).
+fn attach_avatar_to_bigspace(
+    mut commands: Commands,
+    avatars: Query<Entity, (With<Avatar>, Without<GridCell>)>,
+    bigspace: Query<Entity, With<BigSpace>>,
+) {
+    let Ok(root) = bigspace.single() else {
+        return;
+    };
+    for entity in avatars.iter() {
+        commands
+            .entity(entity)
+            .insert((GridCell::default(), ChildOf(root)));
+    }
 }
 
 fn setup_sky(

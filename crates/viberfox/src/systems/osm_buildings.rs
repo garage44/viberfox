@@ -15,11 +15,11 @@ use std::sync::{Arc, Mutex};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
-use big_space::prelude::GridCell;
+use big_space::prelude::{BigSpace, Grid, GridCell};
 
 use crate::components::Region;
-use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE};
-use vibe_core::world::{tile_to_lat_lng, tile_to_meters, REGION_SIZE_METERS};
+use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD};
+use vibe_core::world::{tile_to_lat_lng, tile_to_meters};
 
 /// One OSM building: an outer-ring footprint in (lat, lng) plus a height in metres.
 #[derive(Clone, Debug)]
@@ -47,10 +47,6 @@ pub struct OsmBuildings {
 /// Marker for spawned building meshes.
 #[derive(Component)]
 pub struct OsmBuildingMesh;
-
-/// The displayed region quad's full edge length (mirrors `rendering::spawn_regions`,
-/// which builds `Cuboid::new(REGION_SIZE_METERS/2, .., REGION_SIZE_METERS/2)`).
-const GROUND_FULL: f32 = (REGION_SIZE_METERS as f32) / 2.0;
 
 /// Default metres per storey when only `building:levels` is present.
 const STOREY_HEIGHT: f32 = 3.0;
@@ -92,6 +88,7 @@ pub fn update_buildings(
     mut materials: ResMut<Assets<StandardMaterial>>,
     regions: Query<&Region>,
     camera: Query<(&GridCell, &Transform), With<FreeCamera>>,
+    bigspace: Query<Entity, With<BigSpace>>,
 ) {
     // Establish the region anchor once.
     if osm.anchor.is_none() {
@@ -102,6 +99,7 @@ pub fn update_buildings(
         osm.anchor = Some((region.tile_x, region.tile_y, z, region.latitude));
     }
     let (ax, ay, z, lat) = osm.anchor.unwrap();
+    let tile_m = tile_to_meters(z, lat) as f32;
 
     // Camera's current tile (world position → tile offset from the anchor).
     let Ok((cell, tf)) = camera.single() else {
@@ -110,8 +108,8 @@ pub fn update_buildings(
     let world_x = cell.x as f32 * WORLD_CELL_EDGE + tf.translation.x;
     let world_z = cell.z as f32 * WORLD_CELL_EDGE + tf.translation.z;
     let center = (
-        ax + (world_x / GROUND_FULL).round() as i64,
-        ay + (world_z / GROUND_FULL).round() as i64,
+        ax + (world_x / tile_m).round() as i64,
+        ay + (world_z / tile_m).round() as i64,
     );
 
     // Kick off a re-fetch when the camera has drifted far enough.
@@ -155,14 +153,6 @@ pub fn update_buildings(
         commands.entity(entity).despawn();
     }
 
-    // Quad-to-real-metre ratio for heights (interim, until the real-metre frame).
-    let real_tile_m = tile_to_meters(z, lat) as f32;
-    let height_scale = if real_tile_m > 0.0 {
-        GROUND_FULL / real_tile_m
-    } else {
-        1.0
-    };
-
     // Per-location palette so the city reads as distinct buildings.
     let palette: Vec<Handle<StandardMaterial>> = BUILDING_COLORS
         .iter()
@@ -177,20 +167,32 @@ pub fn update_buildings(
         })
         .collect();
 
+    let Ok(root) = bigspace.single() else {
+        return;
+    };
     for b in &buildings {
-        let ring: Vec<Vec2> = b
+        // World footprint, then recentre on the first vertex so the mesh is local
+        // and the entity can carry a BigSpace GridCell (rebases at any range).
+        let ring_world: Vec<Vec2> = b
             .ring
             .iter()
-            .map(|&(la, lo)| lat_lng_to_local(la, lo, ax, ay, z))
+            .map(|&(la, lo)| lat_lng_to_local(la, lo, ax, ay, z, tile_m))
             .collect();
-        let height = b.height_m * height_scale;
+        let r0 = ring_world[0];
+        let ring: Vec<Vec2> = ring_world.iter().map(|p| *p - r0).collect();
+        let height = b.height_m;
         if let Some(mesh) = build_building_mesh(&ring, height) {
             let mat = palette[building_color_index(b) % palette.len()].clone();
+            let world = Vec3::new(r0.x, 0.05, r0.y);
+            let (cell, local) = Grid::new(WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD)
+                .translation_to_grid(world.as_dvec3());
             let entity = commands
                 .spawn((
                     Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(mat),
-                    Transform::from_xyz(0.0, 0.05, 0.0),
+                    Transform::from_translation(local),
+                    cell,
+                    ChildOf(root),
                     OsmBuildingMesh,
                 ))
                 .id();
@@ -200,10 +202,9 @@ pub fn update_buildings(
     tracing::info!(count = osm.entities.len(), "buildings updated");
 }
 
-/// Web Mercator (lat,lng) → region-local metres on the displayed quad.
-/// `fx,fy ∈ [0,1]` within the tile; the quad spans `±GROUND_FULL/2`.
-/// North is `-Z` (fy grows southward), East is `+X`.
-fn lat_lng_to_local(lat: f64, lng: f64, tile_x: i64, tile_y: i64, z: u32) -> Vec2 {
+/// Web Mercator (lat,lng) → world metres relative to the anchor tile centre.
+/// `tile_m` is the real ground edge of a tile; East is `+X`, South is `+Z`.
+fn lat_lng_to_local(lat: f64, lng: f64, tile_x: i64, tile_y: i64, z: u32, tile_m: f32) -> Vec2 {
     let n = 2.0_f64.powi(z as i32);
     let x = (lng + 180.0) / 360.0 * n;
     let lat_rad = lat.to_radians();
@@ -211,7 +212,7 @@ fn lat_lng_to_local(lat: f64, lng: f64, tile_x: i64, tile_y: i64, z: u32) -> Vec
 
     let fx = (x - tile_x as f64) as f32;
     let fy = (y - tile_y as f64) as f32;
-    Vec2::new((fx - 0.5) * GROUND_FULL, (fy - 0.5) * GROUND_FULL)
+    Vec2::new((fx - 0.5) * tile_m, (fy - 0.5) * tile_m)
 }
 
 /// Extrude a footprint ring (region-local XZ) to a solid: triangulated top cap +

@@ -14,8 +14,8 @@ use crate::systems::rendering::RegionMesh;
 pub struct FreeCamera;
 
 // Simple constants
-const FREE_CAMERA_SPEED: f32 = 20.0;
-const FREE_CAMERA_SPEED_FAST: f32 = 50.0;
+const FREE_CAMERA_SPEED: f32 = 45.0;
+const FREE_CAMERA_SPEED_FAST: f32 = 180.0;
 const MOUSE_SENSITIVITY: f32 = 0.002;
 const MIN_CAMERA_HEIGHT: f32 = 0.5;
 
@@ -26,7 +26,7 @@ const SKYBOX_MESH_FAR: f32 = 1000.0;
 /// play rarely recenters; small enough to keep within-cell f32 precise.
 pub const WORLD_CELL_EDGE: f32 = 10_000.0;
 /// Hysteresis buffer past a cell edge before big_space recenters an entity.
-const WORLD_SWITCH_THRESHOLD: f32 = 100.0;
+pub const WORLD_SWITCH_THRESHOLD: f32 = 100.0;
 
 /// Spawn the world [`BigSpace`] root with the camera as its [`FloatingOrigin`]
 /// (ADR-019). Other content currently spawns at the origin (cell 0) and renders

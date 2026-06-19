@@ -1,13 +1,15 @@
 use crate::components::{NeedsMeshRebuild, NeedsTextureRefresh, Prim, PrimShape, Region};
 use crate::resources::PrimTextureCache;
+use crate::systems::free_camera::{WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD};
 use crate::systems::tile_loader::{RegionTile, TileKey};
+use big_space::prelude::{BigSpace, Grid};
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::Affine2;
 use bevy::render::render_asset::RenderAssetUsages;
-use vibe_core::world::REGION_SIZE_METERS;
+use vibe_core::world::tile_to_meters;
 use vibe_core::PrimSurface;
 
 #[derive(Component)]
@@ -79,7 +81,11 @@ pub fn spawn_regions(
     mut materials: ResMut<Assets<StandardMaterial>>,
     region_query: Query<(Entity, &Region), (Without<RegionMesh>, Without<Prim>)>,
     all_regions: Query<&Region>,
+    bigspace: Query<Entity, With<BigSpace>>,
 ) {
+    let Ok(root) = bigspace.single() else {
+        return; // BigSpace not spawned yet (camera setup runs first); retry next frame
+    };
     // Calculate grid size based on total regions
     let total_regions = all_regions.iter().count();
     let query_count = region_query.iter().count();
@@ -123,13 +129,13 @@ pub fn spawn_regions(
 
         tracing::info!(name = %region.name, position = ?position, "spawning region mesh");
 
-        // Create a simple flat box as the region (easier than plane rotation)
-        // Box with very small height to act as a flat plane
-        let region_size = REGION_SIZE_METERS as f32;
+        // Flat box acting as the region's ground tile, sized to the tile's real
+        // ground extent so it abuts the streamed map tiles (real-metre frame).
+        let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
+        let tile_m = tile_to_meters(z, region.latitude) as f32;
         let region_mesh = meshes.add(Cuboid::new(
-            region_size / 2.0,
-            0.05, // Very thin - acts like a plane
-            region_size / 2.0,
+            tile_m, 0.05, // Very thin - acts like a plane
+            tile_m,
         ));
 
         // Create simple untextured material
@@ -145,13 +151,16 @@ pub fn spawn_regions(
             region.tile_z.clamp(0, u32::MAX as i64) as u32,
         );
 
-        // Spawn region as a flat box at y=0
-        let transform = Transform::from_translation(position);
+        // Place under the BigSpace so the region rebases with the camera (ADR-019).
+        let (region_cell, region_local) = Grid::new(WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD)
+            .translation_to_grid(position.as_dvec3());
 
         commands.entity(entity).insert((
             Mesh3d(region_mesh),
             MeshMaterial3d(default_material),
-            transform,
+            Transform::from_translation(region_local),
+            region_cell,
+            ChildOf(root),
             Visibility::Visible,
             RegionMesh,
             RegionTile {

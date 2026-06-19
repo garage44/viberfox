@@ -17,17 +17,15 @@ use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_image::{Image, ImageSampler};
-use big_space::prelude::GridCell;
+use big_space::prelude::{BigSpace, Grid, GridCell};
 
 use crate::components::Region;
 use crate::resources::OsmTileUrlTemplate;
-use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE};
+use crate::systems::free_camera::{FreeCamera, WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD};
 use crate::systems::tile_loader::load_tile_image;
-use vibe_core::world::REGION_SIZE_METERS;
+use vibe_core::world::tile_to_meters;
 use vibe_core::TileKey;
 
-/// Ground quad edge — matches `rendering::spawn_regions` so tiles abut the region.
-const GROUND_FULL: f32 = (REGION_SIZE_METERS as f32) / 2.0;
 /// Tiles to keep loaded in each direction from the camera (radius 4 → 9×9).
 const LOAD_RADIUS: i64 = 4;
 
@@ -44,6 +42,8 @@ pub struct StreamTileReady;
 pub struct MapStream {
     /// Anchor tile (the region's tile) + zoom; world origin sits at its centre.
     anchor: Option<(i64, i64, u32)>,
+    /// Real ground edge of a tile in metres at the anchor latitude.
+    ground_size: f32,
     loaded: HashMap<TileKey, Entity>,
     /// Tiles ever queued for fetch (kept as a cache so re-entry doesn't refetch).
     requested: HashSet<TileKey>,
@@ -57,6 +57,7 @@ impl Default for MapStream {
     fn default() -> Self {
         Self {
             anchor: None,
+            ground_size: 0.0,
             loaded: HashMap::new(),
             requested: HashSet::new(),
             results: Arc::new(Mutex::new(HashMap::new())),
@@ -82,8 +83,10 @@ pub fn init_map_stream(
         return;
     };
     let z = region.tile_z.clamp(0, u32::MAX as i64) as u32;
+    let ground = tile_to_meters(z, region.latitude) as f32;
     stream.anchor = Some((region.tile_x, region.tile_y, z));
-    stream.quad = Some(meshes.add(Cuboid::new(GROUND_FULL, 0.04, GROUND_FULL)));
+    stream.ground_size = ground;
+    stream.quad = Some(meshes.add(Cuboid::new(ground, 0.04, ground)));
     stream.placeholder = Some(materials.add(StandardMaterial {
         base_color: Color::srgb(0.6, 0.6, 0.6),
         ..default()
@@ -109,6 +112,7 @@ pub fn update_map_stream(
     mut commands: Commands,
     mut stream: ResMut<MapStream>,
     camera: Query<(&GridCell, &Transform), With<FreeCamera>>,
+    bigspace: Query<Entity, With<BigSpace>>,
 ) {
     let Some((ax, ay, z)) = stream.anchor else {
         return;
@@ -121,12 +125,16 @@ pub fn update_map_stream(
     let Ok((cell, tf)) = camera.single() else {
         return;
     };
+    let Ok(root) = bigspace.single() else {
+        return;
+    };
+    let gs = stream.ground_size;
 
     // Camera world position (cell index × cell edge + within-cell offset).
     let world_x = cell.x as f32 * WORLD_CELL_EDGE + tf.translation.x;
     let world_z = cell.z as f32 * WORLD_CELL_EDGE + tf.translation.z;
-    let cdi = (world_x / GROUND_FULL).round() as i64;
-    let cdj = (world_z / GROUND_FULL).round() as i64;
+    let cdi = (world_x / gs).round() as i64;
+    let cdj = (world_z / gs).round() as i64;
     let (ctx, cty) = (ax + cdi, ay + cdj);
 
     // Desired set around the camera (skip the anchor tile — the region covers it).
@@ -148,11 +156,17 @@ pub fn update_map_stream(
         }
         let di = (key.x - ax) as f32;
         let dj = (key.y - ay) as f32;
+        // Place under the BigSpace so the tile rebases with the camera (any range).
+        let world = Vec3::new(di * gs, -0.03, dj * gs);
+        let (tile_cell, local) =
+            Grid::new(WORLD_CELL_EDGE, WORLD_SWITCH_THRESHOLD).translation_to_grid(world.as_dvec3());
         let entity = commands
             .spawn((
                 Mesh3d(quad.clone()),
                 MeshMaterial3d(placeholder.clone()),
-                Transform::from_xyz(di * GROUND_FULL, -0.03, dj * GROUND_FULL),
+                Transform::from_translation(local),
+                tile_cell,
+                ChildOf(root),
                 StreamTile { key: key.clone() },
             ))
             .id();
